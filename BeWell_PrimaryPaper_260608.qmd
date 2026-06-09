@@ -1,0 +1,4039 @@
+---
+title: "BeWell - Sensitivity Analysis"
+format: 
+  html:
+    code-fold: TRUE
+editor_options: 
+  chunk_output_type: console
+---
+Last updated: 4/23/2026
+
+# Load packages
+
+```{r load_packages}
+if (!require(pacman)) install.packages("pacman")
+library(pacman)
+## Load/install/update the packages
+p_load(tidyverse, 
+       janitor, 
+       pivottabler, 
+       psych, 
+       summarytools, 
+       lme4,
+       lmerTest,
+       MuMIn,
+       scales,
+       ggrepel,
+       ggeffects,
+       sjPlot,
+       splines,
+       multcomp,
+       effsize,
+       naniar,
+       mice,
+       miceadds,
+       mitools,
+       mitml,
+       MBESS,
+       broom.mixed,
+       stats,
+       reshape2,
+       ggcorrplot,
+       gt,
+       gtsummary,
+       gtExtras,
+       showtext,
+       patchwork,
+       flextable,
+       brms, 
+       VGAM,
+       ggpubr, 
+       corrplot,
+       performance)
+options(scipen = 0)
+```
+
+# Functions
+
+## Function: Mapping prefix to variable names
+```{r fx_prefix_titles}
+map_prefix <- function(var_name) {
+  target_prefix <- list(
+    phq9_sum = "sr",
+    phq8_sum = "sr",
+    gad7_total = "sr",
+    flourishing_flourishing = "sr",
+    promisSleep_tScore = "sr",
+    medTherapy_counseling = "sr",
+    medTherapy_medAntiDep = "sr",
+    medTherapy_medOther = "sr",
+    medTherapy_bin = "sr",
+    mst_LDI = "beh",
+    mst_correctedRecognition = "beh",
+    linguistic_negative_sentiment = "vlg",
+    linguistic_i = "vlg",
+    crp_dbs_mean_AB = "dbs",
+    crp_plasma_mean_AB = "dbs",
+    cyto_il6_dbs_mean_AB = "dbs",
+    Clostridium_IV_clr = "mib",
+    Desulfovibrio_clr = "mib",
+    Faecalibacterium_clr = "mib",
+    Enterobacteriaceae_clr = "mib",
+    shannon_genus_estimate = "mib"
+  )
+
+  cleaned <- gsub("^(sr|dbs|mib|vlg|beh|sea)_(base|scr|pw1|pw2|pw3|pw4|3mo)_", "", var_name)
+  
+  match_name <- names(target_prefix)[
+    startsWith(cleaned, names(target_prefix))  # take first match
+  ]
+
+  if (length(match_name) > 0) {
+    return(target_prefix[[match_name[1]]])
+  } else {
+    message("No Prefix Found for: ", var_name)
+    return(NA)
+  }
+}
+```
+
+## Function: Mapping worse direction to variable names
+
+```{r fx_map_worse_direction}
+map_worse <- function(var_name) {
+  worse_direction <- c(phq8_sum = "H",
+                     gad7_total = "H",
+                     promisSleep_tScore = "H",
+                     flourishing_flourishing = "L",
+                     linguistic_negative_sentiment = "H",
+                     linguistic_i = "L",
+                     mst_LDI = "L",
+                     mst_correctedRecognition = "L",
+                     linguistic_positive_sentiment = "L",
+                     cheekRaise_full_mean = "L",
+                     Duchenne_full_mean_log = 'L',
+                     crp_dbs_mean_AB = "H",
+                     crp_plasma_mean_AB = "H",
+                     cyto_tnfAlpha_dbs_mean_AB = "H",
+                     cyto_il6_dbs_mean_AB = "H",
+                     cyto_il10_dbs_mean_AB = "H",
+                     Clostridium_IV_clr = "H",
+                     Desulfovibrio_clr = "L",
+                     Faecalibacterium_clr = "H",
+                     Enterobacteriaceae_clr = "L",
+                     shannon_genus_estimate = "H",
+                     simpson_genus_estimate_log = "H")
+  
+  if (var_name %in% names(worse_direction)) {
+    return(worse_direction[[var_name]])
+  } else {
+    cleaned <- gsub("^(sr|dbs|mib|vlg|beh|sea)_(base|scr|pw1|pw2|pw3|pw4|3mo)_", "", var_name)
+  
+    if (cleaned %in% names(worse_direction)) {
+      return(worse_direction[[cleaned]])
+    } else {
+      print('Variable not found')
+    }
+  }
+}
+```
+
+## Function: Mapping titles
+
+```{r title_list}
+target_titles <- list(
+  phq8_sum = "PHQ-8",
+  gad7_total = "GAD-7",
+  promisSleep_tScore = "PROMIS Sleep Disturbance",
+  flourishing_flourishing = "Flourishing Index",
+  crp_plasma_mean_AB = "C-Reactive Protein",
+  cyto_il6_dbs_mean_AB = "Interleukin-6",
+  shannon_genus_estimate = "Alpha Diversity",
+  Enterobacteriaceae_clr = "Enterobacteriaceae",
+  Desulfovibrio_clr = "Desulfovibrio",
+  Faecalibacterium_clr = "Faecalibacterium",
+  Clostridium_IV_clr = "Clostridium IV",
+  mst_LDI = "Lure Discrimination Index",
+  mst_correctedRecognition = "Recognition Memory",
+  linguistic_negative_sentiment = "Negative Affect Words",
+  linguistic_i = "First-Person Pronouns",
+  medTherapy_counseling = "Received professional counseling or psychotherapy to support mental health in the past month",
+  medTherapy_medAntiDep = "Currently taking antidepressant medications",
+  medTherapy_medOther = "Took other prescribed medications to support mental health in the past month",
+  medTherapy_bin = "Recent mental health treatment (therapy or medication use)"
+)
+
+map_title <- function(var_name, title_map) {
+  if (var_name %in% names(title_map)) {
+    return(title_map[[var_name]])
+  } else {
+    cleaned <- gsub("^(sr|dbs|mib|vlg|beh|sea)_(base|scr|pw1|pw2|pw3|pw4|3mo)_", "", var_name)
+  
+    if (cleaned %in% names(title_map)) {
+      return(title_map[[cleaned]])
+    } else {
+      return(var_name)
+    }
+  }
+}
+
+map_title_with_baseline <- function(x, title_map) {
+  # Ensure input is a single string
+  if (!is.character(x) || length(x) != 1) {
+    stop("x must be a single string")
+  }
+  
+  if (str_detect(x, "_base_")) {
+    return("Baseline")
+  } else {
+    return(map_title(x, title_map))
+  }
+}
+```
+
+## Function: Converting dfs from wide format to long format
+
+```{r wide_to_long_fx}
+convert_long_format <- function(df_tmp, target_var_strings, constant_vars){
+  
+  cat("Looking for columns ending with:", paste(target_var_strings, collapse=", "), "\n")
+  
+  ids <- df_tmp$id
+  
+  df_tmp_long <- crossing(id = ids, time = 1:6) %>% 
+    mutate(week = case_when(
+      time == 1 ~ 0,
+      time == 2 ~ 1,
+      time == 3 ~ 2,
+      time == 4 ~ 3,
+      time == 5 ~ 4,
+      time == 6 ~ 17
+    ),
+    time1 = recode_values(time,
+                       1 ~ -4,
+                       2 ~ -3,
+                       3 ~ -2,
+                       4 ~ -1,
+                       c(5, 6) ~ 0),
+    time2 = recode_values(time,
+                       c(1, 2, 3, 4, 5) ~ 0,
+                       6 ~ 1),
+    uniqueid = paste0(id, "_", time))
+  
+  df_tmp_long <- df_tmp_long %>%
+    left_join(df_tmp %>% 
+                dplyr::select('id', all_of(constant_vars)), by = "id")
+  
+  for (i in seq_along(target_var_strings)) {
+    target_var <- target_var_strings[i]
+    print(target_var)
+
+    df_i <- df_tmp %>%
+      pivot_longer(cols = all_of(ends_with(target_var)), 
+                   names_to = "var",
+                   values_to = target_var,
+                   values_drop_na = TRUE) %>% 
+      dplyr::select(id, sr_scr_rand_group, var, !!sym(target_var)) %>%
+      mutate(time = case_when(
+        (substring(var, 4, 6) == 'bas' | substring(var, 5, 7) == 'bas') ~ 1,
+        (substring(var, 4, 6) == 'pw1' | substring(var, 5, 7) == 'pw1') ~ 2,
+        (substring(var, 4, 6) == 'pw2' | substring(var, 5, 7) == 'pw2') ~ 3,
+        (substring(var, 4, 6) == 'pw3' | substring(var, 5, 7) == 'pw3') ~ 4,
+        (substring(var, 4, 6) == 'pw4' | substring(var, 5, 7) == 'pw4') ~ 5,
+        (substring(var, 4, 6) == '3mo' | substring(var, 5, 7) == '3mo') ~ 6
+      ),
+      !!sym(target_var) := as.numeric(!!sym(target_var)),
+      uniqueid = paste0(id, "_", time)) %>% 
+      dplyr::select(uniqueid, !!sym(target_var))
+
+    df_tmp_long <- left_join(df_tmp_long, df_i, by = "uniqueid")
+  }
+  
+  df_tmp_long <- df_tmp_long %>% 
+    dplyr::select(-uniqueid)
+  
+  return(df_tmp_long)
+}
+```
+
+## Function: General linear hypothesis test for long format data
+
+```{r glht_fx}
+glht_models <- function(df_tmp, out_vars, mi_results = "N", ref_level = 'hmp_full', return_results = FALSE) {
+  
+  if (length(out_vars) > 1){
+    
+    models <- vector("list", length(out_vars) * 2)
+    
+    for (i in seq_along(out_vars)) {
+      outcome_var <- out_vars[i]
+      i1 <- i * 2 - 1
+      i2 <- i * 2
+      formula <- as.formula(paste(outcome_var, "~ time1*sr_scr_rand_group + time2*sr_scr_rand_group + (time1|id)"))
+      
+      if (ref_level == 'hmp_full') {
+        analysis_info1 <- glht(lmer(formula, data = df_tmp),
+                               linfct = c("time1:sr_scr_rand_grouphmp_active*4 + sr_scr_rand_grouphmp_active:time2 = 0"))
+        analysis_info2 <- glht(lmer(formula, data = df_tmp),
+                               linfct = c("time1:sr_scr_rand_groupuc*4 + sr_scr_rand_groupuc:time2 = 0"))
+      } else if (ref_level == 'hmp_active') {
+        analysis_info1 <- glht(lmer(formula, data = df_tmp),
+                               linfct = c("time1:sr_scr_rand_grouphmp_full*4 + sr_scr_rand_grouphmp_full:time2 = 0"))
+        analysis_info2 <- glht(lmer(formula, data = df_tmp),
+                               linfct = c("time1:sr_scr_rand_groupuc*4 + sr_scr_rand_groupuc:time2 = 0"))
+      }
+      
+      models[[i1]] <- analysis_info1
+      models[[i2]] <- analysis_info2
+      
+      cat("\nModel:", i1, " - ", outcome_var, " full vs active:\n")
+      print(summary(analysis_info1))
+      
+      if (ref_level == 'hmp_full') {
+        cat("\nModel:", i2, " - ", outcome_var, " full vs uc:\n")
+      } else if (ref_level == 'hmp_active'){
+        cat("\nModel:", i2, " - ", outcome_var, " active vs uc:\n")
+      }
+      print(summary(analysis_info2))
+    }
+    
+    if (return_results == TRUE){
+      return(models)
+    }
+    
+  } else {
+      outcome_var <- out_vars
+      formula <- as.formula(paste(outcome_var, "~ time1*sr_scr_rand_group + time2*sr_scr_rand_group + (time1|id)"))
+      
+      if (ref_level == 'hmp_full') {
+        analysis_info1 <- glht(lmer(formula, data = df_tmp),
+                               linfct = c("time1:sr_scr_rand_grouphmp_active*4 + sr_scr_rand_grouphmp_active:time2 = 0"))
+        analysis_info2 <- glht(lmer(formula, data = df_tmp),
+                               linfct = c("time1:sr_scr_rand_groupuc*4 + sr_scr_rand_groupuc:time2 = 0"))
+      } else if (ref_level == 'hmp_active') {
+        analysis_info1 <- glht(lmer(formula, data = df_tmp),
+                               linfct = c("time1:sr_scr_rand_grouphmp_full*4 + sr_scr_rand_grouphmp_full:time2 = 0"))
+        analysis_info2 <- glht(lmer(formula, data = df_tmp),
+                               linfct = c("time1:sr_scr_rand_groupuc*4 + sr_scr_rand_groupuc:time2 = 0"))
+      }
+      
+      models <- list(analysis_info1, analysis_info2)
+      
+      cat("\nModel: 1 - ", outcome_var, " full vs active:\n")
+      print(summary(analysis_info1))
+      
+      if (ref_level == 'hmp_full') {
+        cat("\nModel: 2 - ", outcome_var, " full vs uc:\n")
+      } else if (ref_level == 'hmp_active'){
+        cat("\nModel: 2 - ", outcome_var, " active vs uc:\n")
+      }
+      print(summary(analysis_info2))
+      
+    if (return_results == TRUE){
+      return(models)
+    }
+  }
+  
+}
+```
+
+## Function: GLHT for imputed data (long format)
+
+```{r fx_glht_imputed}
+
+glht_models_mi <- function(outcome_var, fit_list, return_results = FALSE) {
+  L_active <- "time1:sr_scr_rand_grouphmp_active*4 + sr_scr_rand_grouphmp_active:time2 = 0"
+  L_uc <- "time1:sr_scr_rand_groupuc*4 + sr_scr_rand_groupuc:time2 = 0"
+  
+  active_estimates <- vector("numeric", length(fit_list$analyses))
+  active_std_errors <- vector("numeric", length(fit_list$analyses))
+  uc_estimates <- vector("numeric", length(fit_list$analyses))
+  uc_std_errors <- vector("numeric", length(fit_list$analyses))
+  
+  for (j in seq_along(fit_list$analyses)) {
+    model <- fit_list$analyses[[j]]
+    
+    active_test <- glht(model, linfct = L_active)
+    active_summary <- summary(active_test)
+    active_estimates[j] <- active_summary$test$coefficients
+    active_std_errors[j] <- active_summary$test$sigma
+    
+    uc_test <- glht(model, linfct = L_uc)
+    uc_summary <- summary(uc_test)
+    uc_estimates[j] <- uc_summary$test$coefficients
+    uc_std_errors[j] <- uc_summary$test$sigma
+  }
+  
+  m <- length(fit_list$analyses)
+  
+  active_est_pooled <- mean(active_estimates)
+  active_var_within <- mean(active_std_errors^2)
+  active_var_between <- sum((active_estimates - active_est_pooled)^2) / (m - 1)
+  active_var_total <- active_var_within + (1 + 1/m) * active_var_between
+  
+  # Calculate degrees of freedom using Barnard-Rubin adjustment
+  active_df <- (m - 1) * (1 + active_var_within / ((1 + 1/m) * active_var_between))^2
+  active_t <- active_est_pooled / sqrt(active_var_total)
+  active_p <- 2 * pt(abs(active_t), df = active_df, lower.tail = FALSE)
+  active_ci_lower <- active_est_pooled - qt(0.975, df = active_df) * sqrt(active_var_total)
+  active_ci_upper <- active_est_pooled + qt(0.975, df = active_df) * sqrt(active_var_total)
+  
+  uc_est_pooled <- mean(uc_estimates)
+  uc_var_within <- mean(uc_std_errors^2)
+  uc_var_between <- sum((uc_estimates - uc_est_pooled)^2) / (m - 1)
+  uc_var_total <- uc_var_within + (1 + 1/m) * uc_var_between
+  
+  uc_df <- (m - 1) * (1 + uc_var_within / ((1 + 1/m) * uc_var_between))^2
+  uc_t <- uc_est_pooled / sqrt(uc_var_total)
+  uc_p <- 2 * pt(abs(uc_t), df = uc_df, lower.tail = FALSE)
+  uc_ci_lower <- uc_est_pooled - qt(0.975, df = uc_df) * sqrt(uc_var_total)
+  uc_ci_upper <- uc_est_pooled + qt(0.975, df = uc_df) * sqrt(uc_var_total)
+  
+  cat("\nModel:", outcome_var, " full vs active (pooled):\n")
+  cat("Estimate:", round(active_est_pooled, 4), 
+      "Std. Error:", round(sqrt(active_var_total), 4),
+      "t value:", round(active_t, 4), 
+      "df:", round(active_df, 2),
+      "Pr(>|t|):", round(active_p, 4), "\n")
+  
+  cat("\nModel:", outcome_var, " full vs uc (pooled):\n")
+  cat("Estimate:", round(uc_est_pooled, 4), 
+      "Std. Error:", round(sqrt(uc_var_total), 4),
+      "t value:", round(uc_t, 4),
+      "df:", round(uc_df, 2),
+      "Pr(>|t|):", round(uc_p, 4), "\n")
+  
+    if (return_results) {
+    return(list(
+      active = list(
+        estimate = active_est_pooled,
+        ci_lower = active_ci_lower,
+        ci_upper = active_ci_upper,
+        p_value = active_p
+      ),
+      uc = list(
+        estimate = uc_est_pooled,
+        ci_lower = uc_ci_lower,
+        ci_upper = uc_ci_upper,
+        p_value = uc_p
+      )
+    ))
+  }
+}
+
+```
+
+## Function: General linear hypothesis test for moderation (long format data)
+
+```{r glht_fx_moderation}
+glht_models_moderation <- function(df_tmp, out_vars, moderator_var, mi_results = "N", return_results = FALSE) {
+  
+  if (length(out_vars) > 1){
+    
+    models <- vector("list", length(out_vars) * 2)
+    
+    for (i in seq_along(out_vars)) {
+      outcome_var <- out_vars[i]
+      i1 <- i * 2 - 1
+      i2 <- i * 2
+      formula <- as.formula(paste(outcome_var, "~ time1*sr_scr_rand_group*", moderator_var, " + time2*sr_scr_rand_group*", moderator_var, " + (time1|id)"))
+      
+      
+      
+      analysis_info1 <- glht(lmer(formula, data = df_tmp),
+                             linfct = c(paste0("time1:sr_scr_rand_grouphmp_active:", moderator_var, "*4 + sr_scr_rand_grouphmp_active:", moderator_var, ":time2 = 0")))
+      analysis_info2 <- glht(lmer(formula, data = df_tmp),
+                             linfct = c(paste0("time1:sr_scr_rand_groupuc:", moderator_var, "*4 + sr_scr_rand_groupuc:", moderator_var, ":time2 = 0")))
+      
+      models[[i1]] <- analysis_info1
+      models[[i2]] <- analysis_info2
+      
+      cat("\nModel:", i1, " - ", outcome_var, " full vs active:\n")
+      print(summary(analysis_info1))
+      
+      cat("\nModel:", i2, " - ", outcome_var, " full vs uc:\n")
+      print(summary(analysis_info2))
+    }
+  } else {
+      outcome_var <- out_vars
+      formula <- as.formula(paste(outcome_var, "~ time1*sr_scr_rand_group*", moderator_var, " + time2*sr_scr_rand_group*", moderator_var, " + (time1|id)"))
+      
+      analysis_info1 <- glht(lmer(formula, data = df_tmp),
+                             linfct = c(paste0("time1:sr_scr_rand_grouphmp_active:", moderator_var, "*4 + sr_scr_rand_grouphmp_active:", moderator_var, ":time2 = 0")))
+      analysis_info2 <- glht(lmer(formula, data = df_tmp),
+                             linfct = c(paste0("time1:sr_scr_rand_groupuc:", moderator_var, "*4 + sr_scr_rand_groupuc:", moderator_var, ":time2 = 0")))
+      
+      models <- list(analysis_info1, analysis_info2)
+      
+      cat("\nModel: 1 - ", outcome_var, " full vs active:\n")
+      print(summary(analysis_info1))
+      
+      cat("\nModel: 2 - ", outcome_var, " full vs uc:\n")
+      print(summary(analysis_info2))
+      
+    if (return_results == TRUE){
+      return(models)
+    }
+  }
+  
+}
+```
+
+## Function: Effect size computation for long format data
+
+```{r fx_effect_size_imputed}
+compute_effect_size_long <- function(estimation, data, var, preMI = c('Y', 'N'), og_df, ref_level = 'hmp_full'){
+  preMI <- match.arg(preMI)
+  
+  if (ref_level == 'hmp_full'){
+    group1_t1_term <- "time1:sr_scr_rand_grouphmp_active"
+    group1_t2_term <- "sr_scr_rand_grouphmp_active:time2"
+  } else if (ref_level == 'hmp_active'){
+    group1_t1_term <- "time1:sr_scr_rand_grouphmp_full"
+    group1_t2_term <- "sr_scr_rand_grouphmp_full:time2"
+  }
+  
+  if (preMI == 'Y') {
+    sum_coef <- summary(estimation)$coefficients
+    
+    group1_t1_est <- sum_coef[group1_t1_term, "Estimate"]
+    group1_t2_est <- sum_coef[group1_t2_term, "Estimate"]
+    uc_t1_est <- sum_coef["time1:sr_scr_rand_groupuc", "Estimate"]
+    uc_t2_est <- sum_coef["sr_scr_rand_groupuc:time2", "Estimate"]
+  } else if (preMI == 'N') {
+    group1_t1_est <- summary(estimation) %>% 
+      filter(term == group1_t1_term) %>% 
+      pull(estimate)
+    group1_t2_est <-  summary(estimation) %>% 
+      filter(term == group1_t2_term) %>% 
+      pull(estimate)
+    uc_t1_est <- summary(estimation) %>% 
+      filter(term =="time1:sr_scr_rand_groupuc") %>% 
+      pull(estimate)
+    uc_t2_est <- summary(estimation) %>% 
+      filter(term =="sr_scr_rand_groupuc:time2") %>% 
+      pull(estimate)
+  }
+  
+  var_prefix <- map_prefix(var)
+  
+  base_var <- ifelse(str_detect(var, '_min0'), 
+                 paste0(var_prefix, '_base_', str_remove(var, '_min0')), 
+                 paste0(var_prefix, '_base_', var))
+  
+  #stat from original df~~~~~~~~~~~~~
+  
+
+  sd_base_full <- sd((og_df %>%
+                        filter(sr_scr_rand_group %in% c('hmp_full')) %>%
+                        dplyr::select(!!sym(base_var)) %>% 
+                        unlist()),
+                     na.rm = TRUE)
+  sd_base_active <- sd((og_df %>%
+                        filter(sr_scr_rand_group %in% c('hmp_active')) %>%
+                        dplyr::select(!!sym(base_var)) %>% 
+                        unlist()),
+                     na.rm = TRUE)
+  sd_base_uc <- sd((og_df %>% 
+                          filter(sr_scr_rand_group %in% c('uc')) %>%
+                          dplyr::select(!!sym(base_var)) %>% 
+                          unlist()),
+                       na.rm = TRUE)
+
+    
+  # Convert mids to long format if needed for sample size calculation
+  if (inherits(data, "mids")) {
+    data_long <- mice::complete(data, action = "long", include = TRUE)
+  } else {
+    data_long <- data
+  }
+  
+  # sample sizes from actual data~~~~~~~~~~~~~
+  t1_n <- data_long %>% 
+    filter(!is.na(!!sym(var)),
+            time <= 5) %>% 
+    group_by(sr_scr_rand_group) %>% 
+    summarize(unique_id = n_distinct(id), .groups = 'drop')
+  
+  full_t1_n <- t1_n[t1_n$sr_scr_rand_group == 'hmp_full', 'unique_id'] %>% unlist()
+  active_t1_n <- t1_n[t1_n$sr_scr_rand_group == 'hmp_active', 'unique_id'] %>% unlist()
+  uc_t1_n <- t1_n[t1_n$sr_scr_rand_group == 'uc', 'unique_id'] %>% unlist()
+  
+  t1t2_n <- data_long %>% 
+    filter(!is.na(!!sym(var))) %>% 
+    group_by(sr_scr_rand_group) %>% 
+    summarize(unique_id = n_distinct(id), .groups = 'drop')
+  
+  full_t1t2_n <- t1t2_n[t1t2_n$sr_scr_rand_group == 'hmp_full', 'unique_id'] %>% unlist()
+  active_t1t2_n <- t1t2_n[t1t2_n$sr_scr_rand_group == 'hmp_active', 'unique_id'] %>% unlist()
+  uc_t1t2_n <- t1t2_n[t1t2_n$sr_scr_rand_group == 'uc', 'unique_id'] %>% unlist()
+  
+  # SDs
+  sd_base_activeFull <- sqrt(((full_t1_n - 1)*sd_base_full^2 + (active_t1_n - 1)*sd_base_active^2) / (full_t1_n + active_t1_n - 2))
+  sd_base_ucFull <- sqrt(((full_t1_n - 1)*sd_base_full^2 + (uc_t1_n - 1)*sd_base_uc^2) / (full_t1_n + uc_t1_n - 2))
+  sd_base_ucActive <- sqrt(((active_t1_n - 1)*sd_base_active^2 + (uc_t1_n - 1)*sd_base_uc^2) / (active_t1_n + uc_t1_n - 2))
+  
+  #~~~~~~~~Between-group effect size~~~~~~~~~~~~~~~~~~~
+  
+  full_active_smd_t1 <- (group1_t1_est * 4) / sd_base_activeFull
+  full_active_ci_t1 <- ci.smd(smd = full_active_smd_t1, n.1 = full_t1_n, n.2 = active_t1_n)
+  full_active_smd_t1t2 <- (group1_t1_est * 4 + group1_t2_est * 1) / sd_base_activeFull
+  full_active_ci_t1t2 <- ci.smd(smd = full_active_smd_t1t2, n.1 = full_t1t2_n, n.2 = active_t1t2_n)
+  
+  if (ref_level == 'hmp_full'){
+    group1_uc_smd_t1 <- (uc_t1_est * 4) / sd_base_ucFull
+    group1_uc_ci_t1 <- ci.smd(smd = group1_uc_smd_t1, n.1 = full_t1_n, n.2 = uc_t1_n)
+    group1_uc_smd_t1t2 <- (uc_t1_est * 4 + uc_t2_est * 1) / sd_base_ucFull
+    group1_uc_ci_t1t2 <- ci.smd(smd = group1_uc_smd_t1t2, n.1 = full_t1t2_n, n.2 = uc_t1t2_n)
+  } else if (ref_level == 'hmp_active'){
+    group1_uc_smd_t1 <- (uc_t1_est * 4) / sd_base_ucActive
+    group1_uc_ci_t1 <- ci.smd(smd = group1_uc_smd_t1, n.1 = active_t1_n, n.2 = uc_t1_n)
+    group1_uc_smd_t1t2 <- (uc_t1_est * 4 + uc_t2_est * 1) / sd_base_ucActive
+    group1_uc_ci_t1t2 <- ci.smd(smd = group1_uc_smd_t1t2, n.1 = active_t1t2_n, n.2 = uc_t1t2_n)
+  }
+  
+  cat('\n******Between-group effect size ******\n')
+  cat('\nIntervention vs Active Ctrl******\n')
+  cat('time 1 x group Estimate:', group1_t1_est, '\n')
+  cat('time 2 x group Estimate:', group1_t2_est, '\n')
+  cat('Intervention Time 1 sample size:', full_t1_n, '\n')
+  cat('Active ctrl Time 1 sample size:', active_t1_n, '\n')
+  cat('Intervention overall sample size:', full_t1t2_n, '\n')
+  cat('Active ctrl overall sample size:', active_t1t2_n, '\n')
+  cat('post-test effect size:\n', 
+      '(', group1_t1_est, '* 4) /', sd_base_activeFull, '=', full_active_smd_t1, '\n')
+  cat('95% CI:', round(full_active_ci_t1$Lower, 4), ',', round(full_active_ci_t1$Upper, 4), '\n')
+  cat('overall effect size:\n', 
+      '(', group1_t1_est, '* 4 +', group1_t2_est, '* 1) /', sd_base_activeFull, '=', full_active_smd_t1t2, '\n')
+  cat('95% CI:', round(full_active_ci_t1t2$Lower, 4), ',', round(full_active_ci_t1t2$Upper, 4), '\n')
+  
+  if (ref_level == 'hmp_full'){
+    cat('\nIntervention vs Usual care******\n')
+    cat('time 1 x group Estimate:', uc_t1_est, '\n')
+    cat('time 2 x group Estimate:', uc_t2_est, '\n')
+    cat('Intervention Time 1 sample size:', full_t1_n, '\n')
+    cat('Usual care Time 1 sample size:', uc_t1_n, '\n')
+    cat('Intervention overall sample size:', full_t1t2_n, '\n')
+    cat('Usual care overall sample size:', uc_t1t2_n, '\n')
+    cat('post-test effect size:\n', 
+        '(', uc_t1_est, '* 4) /', sd_base_ucFull, '=', group1_uc_smd_t1, '\n')
+    cat('95% CI:', round(group1_uc_ci_t1$Lower, 4), ',', round(group1_uc_ci_t1$Upper, 4), '\n')
+    cat('overall effect size:\n', 
+        '(', uc_t1_est, '* 4 +', uc_t2_est, '* 1) /', sd_base_ucFull, '=', group1_uc_smd_t1t2, '\n')
+    cat('95% CI:', round(group1_uc_ci_t1t2$Lower, 4), ',', round(group1_uc_ci_t1t2$Upper, 4), '\n\n')
+    group_comparisons <- c("full_vs_active", "full_vs_uc")
+  } else if (ref_level == 'hmp_active'){
+    cat('\nActive Ctrl vs Usual care******\n')
+    cat('time 1 x group Estimate:', uc_t1_est, '\n')
+    cat('time 2 x group Estimate:', uc_t2_est, '\n')
+    cat('Active ctrl Time 1 sample size:', active_t1_n, '\n')
+    cat('Usual care Time 1 sample size:', uc_t1_n, '\n')
+    cat('Active ctrl overall sample size:', active_t1t2_n, '\n')
+    cat('Usual care overall sample size:', uc_t1t2_n, '\n')
+    cat('post-test effect size:\n', 
+        '(', uc_t1_est, '* 4) /', sd_base_ucActive, '=', group1_uc_smd_t1, '\n')
+    cat('95% CI:', round(group1_uc_ci_t1$Lower, 4), ',', round(group1_uc_ci_t1$Upper, 4), '\n')
+    cat('overall effect size:\n', 
+        '(', uc_t1_est, '* 4 +', uc_t2_est, '* 1) /', sd_base_ucActive, '=', group1_uc_smd_t1t2, '\n')
+    cat('95% CI:', round(group1_uc_ci_t1t2$Lower, 4), ',', round(group1_uc_ci_t1t2$Upper, 4), '\n\n')
+    group_comparisons <- c("active_vs_full", "active_vs_uc")
+  }
+  
+  
+  
+  # Return all the effect size as a data frame
+  effect_df <- data.frame(
+    group = c(
+      group_comparisons[1], group_comparisons[1],
+      group_comparisons[2], group_comparisons[2]
+    ),
+    effect_type = c(
+      "T1", "Overall",
+      "T1", "Overall"
+    ),
+    d = c(
+      full_active_smd_t1,
+      full_active_smd_t1t2,
+      group1_uc_smd_t1,
+      group1_uc_smd_t1t2
+    ),
+    ci_lower = c(
+      full_active_ci_t1$Lower,
+      full_active_ci_t1t2$Lower,
+      group1_uc_ci_t1$Lower,
+      group1_uc_ci_t1t2$Lower
+    ),
+    ci_upper = c(
+      full_active_ci_t1$Upper,
+      full_active_ci_t1t2$Upper,
+      group1_uc_ci_t1$Upper,
+      group1_uc_ci_t1t2$Upper
+    )
+  )
+  
+  return(effect_df)
+}
+```
+
+## Function: Effect size computation with moderator for long format data
+
+```{r fx_effect_size_imputed_moderation}
+compute_effect_size_long_moderation <- function(estimation, data, var, moderator_var, preMI = c('Y', 'N'), og_df){
+  preMI <- match.arg(preMI)
+  
+  time1_active_mod <- paste0("time1:sr_scr_rand_grouphmp_active:", moderator_var)
+  time2_active_mod <- paste0("sr_scr_rand_grouphmp_active:", moderator_var, ":time2")
+  time1_uc_mod <- paste0("time1:sr_scr_rand_groupuc:", moderator_var)
+  time2_uc_mod <- paste0("sr_scr_rand_groupuc:", moderator_var, ":time2")
+  
+  
+  if (preMI == 'Y') {
+    sum_coef <- summary(estimation)$coefficients
+    
+    active_t1_est <- sum_coef[time1_active_mod, "Estimate"]
+    active_t2_est <- sum_coef[time2_active_mod, "Estimate"]
+    uc_t1_est <- sum_coef[time1_uc_mod, "Estimate"]
+    uc_t2_est <- sum_coef[time2_uc_mod, "Estimate"]
+  } else if (preMI == 'N') {
+    active_t1_est <- summary(estimation) %>% 
+      filter(term == time1_active_mod) %>% 
+      pull(estimate)
+    active_t2_est <-  summary(estimation) %>% 
+      filter(term ==time2_active_mod) %>% 
+      pull(estimate)
+    uc_t1_est <- summary(estimation) %>% 
+      filter(term == time1_uc_mod) %>% 
+      pull(estimate)
+    uc_t2_est <- summary(estimation) %>% 
+      filter(term == time2_uc_mod) %>% 
+      pull(estimate)
+  }
+  
+  var_prefix <- map_prefix(var)
+  
+  base_var <- ifelse(str_detect(var, '_min0'), 
+                 paste0(var_prefix, '_base_', str_remove(var, '_min0')), 
+                 paste0(var_prefix, '_base_', var))
+  
+  #stat from original df~~~~~~~~~~~~~
+  
+  full_active_sd_base <- sd((og_df %>% 
+                          filter(sr_scr_rand_group %in% c('hmp_full', 'hmp_active')) %>%
+                          dplyr::select(!!sym(base_var)) %>% unlist()),
+                       na.rm = TRUE)
+  
+  full_uc_sd_base <- sd((og_df %>% 
+                          filter(sr_scr_rand_group %in% c('hmp_full', 'uc')) %>%
+                          dplyr::select(!!sym(base_var)) %>% unlist()),
+                       na.rm = TRUE)
+    
+  # Convert mids to long format if needed for sample size calculation
+  if (inherits(data, "mids")) {
+    data_long <- mice::complete(data, action = "long", include = TRUE)
+  } else {
+    data_long <- data
+  }
+  
+  # sample sizes from actual data~~~~~~~~~~~~~
+  t1_n <- data_long %>% 
+    filter(!is.na(!!sym(var)),
+            time <= 5) %>% 
+    group_by(sr_scr_rand_group) %>% 
+    summarize(unique_id = n_distinct(id), .groups = 'drop')
+  
+  full_t1_n <- t1_n[t1_n$sr_scr_rand_group == 'hmp_full', 'unique_id'] %>% unlist()
+  active_t1_n <- t1_n[t1_n$sr_scr_rand_group == 'hmp_active', 'unique_id'] %>% unlist()
+  uc_t1_n <- t1_n[t1_n$sr_scr_rand_group == 'uc', 'unique_id'] %>% unlist()
+  
+  t1t2_n <- data_long %>% 
+    filter(!is.na(!!sym(var))) %>% 
+    group_by(sr_scr_rand_group) %>% 
+    summarize(unique_id = n_distinct(id), .groups = 'drop')
+  
+  full_t1t2_n <- t1t2_n[t1t2_n$sr_scr_rand_group == 'hmp_full', 'unique_id'] %>% unlist()
+  active_t1t2_n <- t1t2_n[t1t2_n$sr_scr_rand_group == 'hmp_active', 'unique_id'] %>% unlist()
+  uc_t1t2_n <- t1t2_n[t1t2_n$sr_scr_rand_group == 'uc', 'unique_id'] %>% unlist()
+  
+  #~~~~~~~~Between-group effect size~~~~~~~~~~~~~~~~~~~
+    
+  # Adding the moderator mean in effect size calculation 
+  moderator_mean <- mean(og_df[[moderator_var]], na.rm = TRUE)
+  
+  full_active_smd_t1 <- (moderator_mean*(active_t1_est * 4)) / full_active_sd_base
+  full_active_ci_t1 <- ci.smd(smd = full_active_smd_t1, n.1 = full_t1_n, n.2 = active_t1_n)
+  full_active_smd_t1t2 <- (moderator_mean*(active_t1_est * 4 + active_t2_est * 1)) / full_active_sd_base
+  full_active_ci_t1t2 <- ci.smd(smd = full_active_smd_t1t2, n.1 = full_t1t2_n, n.2 = active_t1t2_n)
+  
+  full_uc_smd_t1 <- (moderator_mean*(uc_t1_est * 4)) / full_uc_sd_base
+  full_uc_ci_t1 <- ci.smd(smd = full_uc_smd_t1, n.1 = full_t1_n, n.2 = uc_t1_n)
+  full_uc_smd_t1t2 <- (moderator_mean*(uc_t1_est * 4 + uc_t2_est * 1)) / full_uc_sd_base
+  full_uc_ci_t1t2 <- ci.smd(smd = full_uc_smd_t1t2, n.1 = full_t1t2_n, n.2 = uc_t1t2_n)
+
+  
+  cat('\n******Mean of', moderator_var, '******\n')
+  cat('\n', moderator_mean, '\n')
+  
+  cat('\n******Between-group effect size ******\n')
+  cat('\nIntervention vs Active Ctrl******\n')
+  cat('time 1 x group x ', moderator_var, ' Estimate:', active_t1_est, '\n')
+  cat('time 2 x group x ', moderator_var, ' Estimate:', active_t2_est, '\n')
+  cat('Intervention Time 1 sample size:', full_t1_n, '\n')
+  cat('Active ctrl Time 2 sample size:', active_t1_n, '\n')
+  cat('Intervention overall sample size:', full_t1t2_n, '\n')
+  cat('Active ctrl overall sample size:', active_t1t2_n, '\n')
+  cat('post-test effect size:\n', 
+      '(', moderator_mean, '*(', active_t1_est, '* 4) /', full_active_sd_base, ') =', full_active_smd_t1, '\n')
+  cat('95% CI:', round(full_active_ci_t1$Lower, 4), ',', round(full_active_ci_t1$Upper, 4), '\n')
+  cat('overall effect size:\n', 
+      '(', moderator_mean, '*(', active_t1_est, '* 4 +', active_t2_est, '* 1) /', full_active_sd_base, ') =', full_active_smd_t1t2, '\n')
+  cat('95% CI:', round(full_active_ci_t1t2$Lower, 4), ',', round(full_active_ci_t1t2$Upper, 4), '\n')
+  
+  cat('\nIntervention vs Usual care******\n')
+  cat('time 1 x group x ', moderator_var, ' Estimate:', uc_t1_est, '\n')
+  cat('time 2 x group x ', moderator_var, ' Estimate:', uc_t2_est, '\n')
+  cat('Intervention Time 1 sample size:', full_t1_n, '\n')
+  cat('Usual care Time 2 sample size:', uc_t1_n, '\n')
+  cat('Intervention overall sample size:', full_t1t2_n, '\n')
+  cat('Usual care overall sample size:', uc_t1t2_n, '\n')
+  cat('post-test effect size:\n', 
+      '(', moderator_mean, '*(', uc_t1_est, '* 4) /', full_uc_sd_base, ') =', full_uc_smd_t1, '\n')
+  cat('95% CI:', round(full_uc_ci_t1$Lower, 4), ',', round(full_uc_ci_t1$Upper, 4), '\n')
+  cat('overall effect size:\n', 
+      '(', moderator_mean, '*(', uc_t1_est, '* 4 +', uc_t2_est, '* 1) /', full_uc_sd_base, ') =', full_uc_smd_t1t2, '\n')
+  cat('95% CI:', round(full_uc_ci_t1t2$Lower, 4), ',', round(full_uc_ci_t1t2$Upper, 4), '\n\n')
+  
+  # Return all the effect size as a data frame
+  effect_df <- data.frame(
+    group = c(
+      "full_vs_active", "full_vs_active",
+      "full_vs_uc", "full_vs_uc"
+    ),
+    effect_type = c(
+      "T1", "Overall",
+      "T1", "Overall"
+    ),
+    d = c(
+      full_active_smd_t1,
+      full_active_smd_t1t2,
+      full_uc_smd_t1,
+      full_uc_smd_t1t2
+    ),
+    ci_lower = c(
+      full_active_ci_t1$Lower,
+      full_active_ci_t1t2$Lower,
+      full_uc_ci_t1$Lower,
+      full_uc_ci_t1t2$Lower
+    ),
+    ci_upper = c(
+      full_active_ci_t1$Upper,
+      full_active_ci_t1t2$Upper,
+      full_uc_ci_t1$Upper,
+      full_uc_ci_t1t2$Upper
+    )
+  )
+  
+  return(effect_df)
+}
+```
+
+## Function: Scale imputed values
+
+If higher level = worse, then the scaling should be done with 1.1 and 1.2, while if lower level = worse, then it should be done with 0.8 and 0.9
+
+```{r fx_scale_imputed}
+scale_imputed_values_long <- function(df_tmp, outcome) {
+  worse <- map_worse(outcome)
+  
+  missing_var <- paste0("missing_", outcome)
+  
+  if (worse == "H"){
+    var110 <- paste0(outcome, "_110")
+    var120 <- paste0(outcome, "_120")
+    
+    df_tmp <- df_tmp %>% 
+      mutate(!!sym(var110) := if_else(!!sym(missing_var) == 1, 
+                                      !!sym(outcome) * 1.1,
+                                      !!sym(outcome)),
+             !!sym(var120) := if_else(!!sym(missing_var) == 1, 
+                                      !!sym(outcome) * 1.2,
+                                      !!sym(outcome))
+             )
+  } else if (worse == "L"){
+    var80 <- paste0(outcome, "_80")
+    var90 <- paste0(outcome, "_90")
+    
+    df_tmp <- df_tmp %>% 
+      mutate(!!sym(var80) := if_else(!!sym(missing_var) == 1, 
+                                     !!sym(outcome) * 0.8,
+                                     !!sym(outcome)),
+             !!sym(var90) := if_else(!!sym(missing_var) == 1, 
+                                     !!sym(outcome) * 0.9,
+                                     !!sym(outcome))
+             )
+  }
+  
+  print(tail(df_tmp %>% filter(!!sym(missing_var) == 1)))
+  
+  return(df_tmp)
+}
+```
+
+
+## Function: Piecewise model with imputed data
+
+OG model
+
+```{r fx_piecewise_original}
+run_piecewise_og_long <- function(outcome, covar_formula = NULL, og_df_long = df_long, og_df_wide = df, covariates = NULL, return_table = FALSE, exc_outlier = FALSE, ref_level = 'hmp_full'){
+  
+  og_df_long <- og_df_long %>% 
+    mutate(sr_scr_rand_group = relevel(factor(sr_scr_rand_group), ref = ref_level))
+  
+  if (!is.null(covariates)){
+    covar_formula <- paste0(covariates, collapse=" + ")
+    covar_formula <- paste0(covar_formula, "+ ")
+  } else {
+    covar_formula <- NULL
+  }
+  
+  if (exc_outlier == TRUE){ #exc outlier (mean +/- >3SDs) if necessary, this will overrides og_df_wide and og_df_long!!!
+    og_df_wide <- og_df_wide %>% 
+      mutate(across(
+        matches(outcome),
+        ~ {
+          x <- .
+          threshold_upper <- mean(x, na.rm = TRUE) + 3 * sd(x, na.rm = TRUE)
+          threshold_lower <- mean(x, na.rm = TRUE) - 3 * sd(x, na.rm = TRUE)
+          replace(x, x >= threshold_upper | x <= threshold_lower, NA)
+        }
+      ))
+    
+    og_df_long <- convert_long_format(df_tmp = og_df_wide, 
+                                      target_var_strings = outcome,
+                                   constant_vars = 'sr_scr_rand_group')
+  }
+  
+  og_formula <- as.formula(paste(outcome, "~ ", covar_formula, "time1*sr_scr_rand_group + time2*sr_scr_rand_group + (time1|id)"))
+  
+  cat('\n\n')
+  print(og_formula)
+  og_est <- lmer(og_formula, data = og_df_long)
+  summary_og_est <- summary(og_est)
+  fixed_effects <- summary_og_est$coefficients
+  fixed_effects_rounded <- round(fixed_effects, 4)
+
+  confint_og_est <- confint(og_est)
+  confint_fixed <- confint_og_est[rownames(confint_og_est) %in% rownames(fixed_effects), ]
+  confint_fixed_rounded <- round(confint_fixed, 4)
+
+  results_table <- cbind(
+    Estimate = fixed_effects_rounded[, "Estimate"],
+    Std_Error = fixed_effects_rounded[, "Std. Error"],
+    t_value = fixed_effects_rounded[, "t value"],
+    df = fixed_effects_rounded[, "df"],
+    p_value = fixed_effects_rounded[, "Pr(>|t|)"],
+    `CI_2.5%` = confint_fixed_rounded[, 1],
+    `CI_97.5%` = confint_fixed_rounded[, 2]
+    )
+
+  print(results_table)
+
+  print(r.squaredGLMM(og_est))
+  
+  cat('\n****** Effect Size summary ******\n')
+  effect_df <- compute_effect_size_long(estimation = og_est,
+                        data = og_df_long,
+                        var = outcome,
+                        preMI = 'Y',
+                        og_df = og_df_wide,
+                        ref_level = ref_level)
+  
+  
+  glht_models_all <- glht_models(og_df_long, as.character(outcome), return_results = TRUE, ref_level = ref_level)
+  
+  if (return_table == TRUE){
+  glht_full_active <- glht_models_all[[1]]
+  glht_full_active_summary <- summary(glht_full_active)
+  glht_group1_uc <- glht_models_all[[2]]
+  glht_group1_uc_summary <- summary(glht_group1_uc)
+  
+  if (ref_level == 'hmp_full'){
+    group_comparison <- c("full_vs_active", "full_vs_uc")
+    group_comparison_cap <- c("Full_vs_Active", "Full_vs_UC")
+    group1_time1_term <- "time1:sr_scr_rand_grouphmp_active"
+  } else if (ref_level == 'hmp_active'){
+    group_comparison <- c("active_vs_full", "active_vs_uc")
+    group_comparison_cap <- c("Active_vs_Full", "Active_vs_UC")
+    group1_time1_term <- "time1:sr_scr_rand_grouphmp_full"
+  }
+    
+  glht_table <- data.frame(
+    comparison = group_comparison,
+    estimate = c(coef(glht_full_active_summary)[1], coef(glht_group1_uc_summary)[1]),
+    t_value = c(glht_full_active_summary$test$tstat[1], glht_group1_uc_summary$test$tstat[1]),
+    p_value = c(glht_full_active_summary$test$pvalues[1], glht_group1_uc_summary$test$pvalues[1]),
+    ci_lower = c(confint(glht_full_active)$confint[1, "lwr"], confint(glht_group1_uc)$confint[1, "lwr"]),
+    ci_upper = c(confint(glht_full_active)$confint[1, "upr"], confint(glht_group1_uc)$confint[1, "upr"])
+  )
+  
+   summary_table <- data.frame(
+    outcome = outcome,
+    comparison = rep(group_comparison_cap, each = 2),
+    timepoint = rep(c("Week 4 vs. Baseline", "Week 17 vs. Baseline"), 2),
+    
+    # Coefficients
+    coef = c(
+      fixed_effects[group1_time1_term, "Estimate"],
+      coef(glht_full_active_summary)[1],
+      fixed_effects["time1:sr_scr_rand_groupuc", "Estimate"],
+      coef(glht_group1_uc_summary)[1]
+    ),
+    
+    # Coefficient CIs
+    coef_ci_lower = c(
+      confint_fixed[group1_time1_term, 1],
+      confint(glht_full_active)$confint[1, "lwr"],
+      confint_fixed["time1:sr_scr_rand_groupuc", 1],
+      confint(glht_group1_uc)$confint[1, "lwr"]
+    ),
+    coef_ci_upper = c(
+      confint_fixed[group1_time1_term, 2],
+      confint(glht_full_active)$confint[1, "upr"],
+      confint_fixed["time1:sr_scr_rand_groupuc", 2],
+      confint(glht_group1_uc)$confint[1, "upr"]
+    ),
+    
+    # P-values
+    p_value = c(
+      fixed_effects[group1_time1_term, "Pr(>|t|)"],
+      glht_full_active_summary$test$pvalues[1],
+      fixed_effects["time1:sr_scr_rand_groupuc", "Pr(>|t|)"],
+      glht_group1_uc_summary$test$pvalues[1]
+    ),
+    
+    # Effect sizes
+    d = effect_df$d,
+    d_ci_lower = effect_df$ci_lower,
+    d_ci_upper = effect_df$ci_upper,
+    
+    stringsAsFactors = FALSE
+  )
+   
+     # Round numeric columns
+  summary_table <- summary_table %>%
+    mutate(across(where(is.numeric), ~round(., 4)))
+  
+    return(list(model = og_est, results_summary = summary_table, ci_fixed = confint_fixed))
+  }
+}
+```
+
+OG model with moderator
+
+```{r fx_piecewise_original_moderation}
+run_piecewise_og_long_moderation <- function(outcome, covar_formula = NULL, og_df_long = df_long, og_df_wide = df, moderator_var, covariates = NULL, return_table = FALSE){
+  if (!is.null(covariates)){
+    covar_formula <- paste0(covariates, collapse=" + ")
+    covar_formula <- paste0(covar_formula, "+ ")
+  } else {
+    covar_formula <- NULL
+  }
+
+  og_formula <- as.formula(paste(outcome, "~ ", covar_formula, "time1*sr_scr_rand_group*", moderator_var, " + time2*sr_scr_rand_group*", moderator_var, " + (time1|id)"))
+  
+  
+  cat('\n\n')
+  print(og_formula)
+  og_est <- lmer(og_formula, data = og_df_long)
+  summary_og_est <- summary(og_est)
+  fixed_effects <- summary_og_est$coefficients
+  fixed_effects_rounded <- round(fixed_effects, 4)
+
+  confint_og_est <- confint(og_est)
+  confint_fixed <- confint_og_est[rownames(confint_og_est) %in% rownames(fixed_effects), ]
+  confint_fixed_rounded <- round(confint_fixed, 4)
+
+  results_table <- cbind(
+    Estimate = fixed_effects_rounded[, "Estimate"],
+    Std_Error = fixed_effects_rounded[, "Std. Error"],
+    t_value = fixed_effects_rounded[, "t value"],
+    df = fixed_effects_rounded[, "df"],
+    p_value = fixed_effects_rounded[, "Pr(>|t|)"],
+    `CI_2.5%` = confint_fixed_rounded[, 1],
+    `CI_97.5%` = confint_fixed_rounded[, 2]
+    )
+
+  print(results_table)
+
+  print(r.squaredGLMM(og_est))
+  
+  cat('\n****** Effect Size summary ******\n')
+    effect_df <- compute_effect_size_long_moderation(estimation = og_est,
+                                                     data = og_df_long,
+                                                     var = outcome,
+                                                     moderator_var = moderator_var,
+                                                     preMI = 'Y',
+                                                     og_df = og_df_wide)
+    
+    
+    
+  if (return_table == TRUE){
+      glht_models_all <- glht_models_moderation(og_df_long, 
+                                                as.character(outcome), 
+                                                moderator_var = moderator_var,
+                                                return_results = TRUE)
+      glht_full_active <- glht_models_all[[1]]
+      glht_full_active_summary <- summary(glht_full_active)
+      glht_full_uc <- glht_models_all[[2]]
+      glht_full_uc_summary <- summary(glht_full_uc)
+      
+      glht_table <- data.frame(
+        comparison = c("full_vs_active", "full_vs_uc"),
+        estimate = c(coef(glht_full_active_summary)[1], coef(glht_full_uc_summary)[1]),
+        t_value = c(glht_full_active_summary$test$tstat[1], glht_full_uc_summary$test$tstat[1]),
+        p_value = c(glht_full_active_summary$test$pvalues[1], glht_full_uc_summary$test$pvalues[1]),
+        ci_lower = c(confint(glht_full_active)$confint[1, "lwr"], confint(glht_full_uc)$confint[1, "lwr"]),
+        ci_upper = c(confint(glht_full_active)$confint[1, "upr"], confint(glht_full_uc)$confint[1, "upr"])
+      )
+  
+      time1_active_mod <- paste0("time1:sr_scr_rand_grouphmp_active:", moderator_var)
+      time1_uc_mod <- paste0("time1:sr_scr_rand_groupuc:", moderator_var)
+      time2_active_mod <- paste0("sr_scr_rand_grouphmp_active:", moderator_var, ":time2")
+      time2_uc_mod <- paste0("sr_scr_rand_groupuc:", moderator_var, ":time2")
+      
+       summary_table <- data.frame(
+        outcome = outcome,
+        comparison = rep(c("Full_vs_Active", "Full_vs_UC"), each = 2),
+        timepoint = rep(c("Week 4 vs. Baseline", "Week 17 vs. Baseline"), 2),
+        
+        # Coefficients
+        coef = c(
+          fixed_effects[time1_active_mod, "Estimate"],
+          coef(glht_full_active_summary)[1],
+          fixed_effects[time1_uc_mod, "Estimate"],
+          coef(glht_full_uc_summary)[1]
+        ),
+        
+        # Coefficient CIs
+        coef_ci_lower = c(
+          confint_fixed[time1_active_mod, 1],
+          confint(glht_full_active)$confint[1, "lwr"],
+          confint_fixed[time1_uc_mod, 1],
+          confint(glht_full_uc)$confint[1, "lwr"]
+        ),
+        coef_ci_upper = c(
+          confint_fixed[time1_active_mod, 2],
+          confint(glht_full_active)$confint[1, "upr"],
+          confint_fixed[time1_uc_mod, 2],
+          confint(glht_full_uc)$confint[1, "upr"]
+        ),
+        
+        # P-values
+        p_value = c(
+          fixed_effects[time1_active_mod, "Pr(>|t|)"],
+          glht_full_active_summary$test$pvalues[1],
+          fixed_effects[time1_uc_mod, "Pr(>|t|)"],
+          glht_full_uc_summary$test$pvalues[1]
+        ),
+        
+        # Effect sizes
+        d = effect_df$d,
+        d_ci_lower = effect_df$ci_lower,
+        d_ci_upper = effect_df$ci_upper,
+        
+        stringsAsFactors = FALSE
+      )
+       
+     # Round numeric columns
+  summary_table <- summary_table %>%
+    mutate(across(where(is.numeric), ~round(., 4)))
+  
+    return(list(model = og_est, results_summary = summary_table, ci_fixed = confint_fixed))
+  }
+}
+```
+
+## Function for imputed piecewise models
+There are four models:
+- Original model
+- Model with imputed data
+- Model with imputed data, in which the data is scaled to be 10% worse
+- Model with imputed data, in which the data is scaled to be 20% worse
+
+```{r run_sensitivity_imputed_long}
+run_sensitivity_imputed_long <- function(df_tmp, outcome, 
+                                         covariates = NULL, og_df_wide = df, 
+                                         og_df_long = df_long, return_table = FALSE,
+                                         return_models = FALSE){
+  
+  worse <- map_worse(outcome)
+  
+  if (!is.null(covariates)){
+    covar_formula <- paste0(covariates, collapse=" + ")
+    covar_formula <- paste0(covar_formula, "+ ")
+  } else {
+    covar_formula <- NULL
+  }
+
+  # Original model (unchanged)
+  cat("\nOutcome:", outcome,"(Original, NOT imputed) -----------------------\n")
+  orig_results <- run_piecewise_og_long(outcome,
+                          covar_formula,
+                          og_df_wide = og_df_wide,
+                          og_df_long = og_df_long,
+                          return_table = TRUE)
+  
+  og_summary <- orig_results$results_summary
+  og_summary <- og_summary %>% 
+    mutate(model_type = "Original") %>% 
+    relocate(outcome, model_type)
+
+  mids_tmp <- mice::as.mids(df_tmp)
+  
+  process_model <- function(outcome_name, model_label) {
+    cat("\nOutcome:", outcome_name, "(", model_label, ") -----------------------\n")
+    
+    model_check <- with(mids_tmp,
+      lmer(formula(paste(outcome_name, "~ ", covar_formula, "time1*sr_scr_rand_group + time2*sr_scr_rand_group + (time1|id)")),
+           control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+    )
+    
+    est <- pool(model_check)
+    summary_est <- summary(est, conf.int = TRUE)
+    summary_est[, 2:ncol(summary_est)] <- round(summary_est[, 2:ncol(summary_est)], 4)
+    print(summary_est)
+    
+    effect_df <- compute_effect_size_long(estimation = est, data = mids_tmp, 
+                                          var = outcome, preMI = 'N', og_df = og_df_wide)
+    
+    glht_results <- glht_models_mi(outcome_name, model_check, return_results = return_table)
+    
+    if (return_table) {
+      time1_active_idx <- which(summary_est$term == "time1:sr_scr_rand_grouphmp_active")
+      time1_uc_idx <- which(summary_est$term == "time1:sr_scr_rand_groupuc")
+      
+      summary_table <- data.frame(
+        outcome = outcome,
+        model_type = model_label,
+        comparison = rep(c("Full_vs_Active", "Full_vs_UC"), each = 2),
+        timepoint = rep(c("Week 4 vs. Baseline", "Week 17 vs. Baseline"), 2),
+        coef = c(summary_est$estimate[time1_active_idx], glht_results$active$estimate,
+                summary_est$estimate[time1_uc_idx], glht_results$uc$estimate),
+        coef_ci_lower = c(summary_est$`2.5 %`[time1_active_idx], glht_results$active$ci_lower,
+                         summary_est$`2.5 %`[time1_uc_idx], glht_results$uc$ci_lower),
+        coef_ci_upper = c(summary_est$`97.5 %`[time1_active_idx], glht_results$active$ci_upper,
+                         summary_est$`97.5 %`[time1_uc_idx], glht_results$uc$ci_upper),
+        p_value = c(summary_est$p.value[time1_active_idx], glht_results$active$p_value,
+                   summary_est$p.value[time1_uc_idx], glht_results$uc$p_value),
+        d = effect_df$d,
+        d_ci_lower = effect_df$ci_lower,
+        d_ci_upper = effect_df$ci_upper,
+        stringsAsFactors = FALSE
+      ) %>%
+        mutate(across(where(is.numeric), ~round(., 4)))
+      
+      return(list(
+        table = summary_table,
+        model = list(
+          model = model_check,
+          pooled = est,
+          glht = glht_results,
+          effect_size = effect_df,
+          outcome_name = outcome_name,
+          model_type = model_label
+        )
+      ))
+    }
+  }
+  
+  # Store results if return_table = TRUE
+  if (return_table) {
+    models_list <- list()
+    tables_list <- list()
+  }
+  
+  # Process all models
+  result_imp <- process_model(outcome, "Imputed")
+  if (return_table) {
+    models_list[["original"]] <- og_summary
+    models_list[["imputed"]] <- result_imp$model
+    tables_list[["imputed"]] <- result_imp$table
+  }
+  
+  if (worse == "H") {
+    result_110 <- process_model(paste0(outcome, "_110"), "Imputed 110%")
+    result_120 <- process_model(paste0(outcome, "_120"), "Imputed 120%")
+    if (return_table) {
+      models_list[["imputed_110"]] <- result_110$model
+      tables_list[["imputed_110"]] <- result_110$table
+      models_list[["imputed_120"]] <- result_120$model
+      tables_list[["imputed_120"]] <- result_120$table
+    }
+  } else if (worse == "L") {
+    result_90 <- process_model(paste0(outcome, "_90"), "Imputed 90%")
+    result_80 <- process_model(paste0(outcome, "_80"), "Imputed 80%")
+    if (return_table) {
+      models_list[["imputed_90"]] <- result_90$model
+      tables_list[["imputed_90"]] <- result_90$table
+      models_list[["imputed_80"]] <- result_80$model
+      tables_list[["imputed_80"]] <- result_80$table
+    }
+  }
+  
+
+  
+  if (return_table) {
+    return(list(
+      summary_table = bind_rows(tables_list),
+      models = models_list,
+      outcome = outcome
+    ))
+  }
+}
+```
+
+## Function: Set the predictor matrix and actual imputation
+
+The df will only consist of the time, week, group, and outcome variables. If needs to add other covariates, update the pred matrix accordingly.
+
+```{r set_the_prediction_matrix}
+imputating_missing_long <- function(df_tmp, vars, pred_spec = NULL, restrict_range = c("Y", "N"), range_matrix = NULL){
+  set.seed(20250314)
+  
+  data_long <- df_tmp %>% 
+    dplyr::select(id, 
+                  time,
+                  week,
+                  time1,
+                  time2,
+                  sr_scr_rand_group,
+                  all_of(vars),
+                  starts_with("missing_"))
+  ini <- mice(data_long, maxit=0, print = FALSE)
+  pred <- ini$predictorMatrix
+  
+  pred[,'id'] <- 0
+  # pred[, 'time'] <- 0
+  pred[, 'week'] <- 0
+  pred[, 'time1'] <- 0
+  pred[, 'time2'] <- 0
+  pred[, 'sr_scr_rand_group'] <- 0
+  
+  #imputation method: "" = MICE selects the best one automatically; 2l.pan = best for nested continuous data
+  meth <- rep("", ncol(data_long))  # Default to MICE choosing method
+  names(meth) <- names(data_long)
+  if (restrict_range == "Y"){
+    post <- make.post(data_long)
+  }
+  
+  for (var in vars) {
+    missing_outcome <- paste0('missing_', var)
+    pred[, missing_outcome] <- 0
+    
+    if (is.null(pred_spec)){
+    pred[var, ] <- c(-2, 2, 0, 0, 0, 2, rep(2, length(vars)), rep(0, length(vars))) # Update if adding covariates
+    } else {
+      pred[var, ] <- pred_spec %>% 
+        dplyr::select(!!sym(var)) %>% 
+        unlist()
+    }
+    
+    if (is.factor(data_long[[var]])) {
+      if (length(levels(data_long[[var]])) == 2) {
+        meth[var] <- "logreg"  # For binary categorical variables
+        } else if (is.ordered(data_long[[var]])) {
+          meth[var] <- "polr"    # For ordered categorical variables
+          } else {
+            meth[var] <- "polyreg" # For unordered categorical variables with >2 levels
+            }
+      } else if (is.numeric(data_long[[var]])){
+      meth[var] <- "2l.pan"
+    }
+    
+    if ((restrict_range == "Y") & (is.numeric(data_long[[var]]))){
+      if (var %in% names(range_matrix)) {  # Ensure the variable exists in the range list
+        post[var] <- paste0("imp[[j]][, i] <- squeeze(imp[[j]][,i], c(", range_matrix[[var]][1], ", ",
+                            range_matrix[[var]][2], "))")
+        } else {
+          warning(paste("Variable", var, "not found in range_matrix, skipping restriction"))
+        }
+      }
+  }
+  
+  print(pred)
+  print(meth)
+  
+  if (restrict_range == "Y"){
+    imp_tmp <- mice(data_long, 
+                    pred = pred, 
+                    meth = meth, 
+                    maxit = 10, 
+                    # print = FALSE, 
+                    m = 50,
+                    post = post
+                    )
+  } else {
+    imp_tmp <- mice(data_long, 
+                    pred = pred, 
+                    meth = meth, 
+                    maxit = 10, 
+                    # print = FALSE, 
+                    m = 50
+                    )
+  }
+  
+  for (var in vars) {
+    missing_outcome <- paste0('missing_', var)
+    miss_count <- sum(df_tmp[[missing_outcome]])
+    if (miss_count > 0) {  
+      print(plot(imp_tmp, var)) 
+      print(densityplot(imp_tmp, as.formula(paste("~", var))))
+    } else {
+      print(paste("Skipping", var, "as it has no missing data and was not imputed"))
+    }
+  }
+  
+  return(imp_tmp)
+}
+```
+
+## Function: Set the predictor matrix and actual imputation
+
+df generated by this code will only consist of group, demographic variables and target variable(s). If needs to add other covariates, update the pred matrix accordingly.
+
+```{r set_the_prediction_matrix}
+imputating_missing_wide <- function(df_tmp, vars, pred_spec = NULL, restrict_range = c("Y", "N"), range_matrix = NULL){
+  set.seed(20250701) 
+  
+  df_og <- df_tmp
+  
+  df_tmp <- df_tmp %>% 
+    dplyr::select(id,
+                  sr_scr_rand_group, 
+                  all_of(vars),
+                  starts_with('missing'))
+  
+  get_base_name <- function(var, value_range_names) {
+    matched <- value_range_names[
+      vapply(value_range_names, function(x) endsWith(var, x), logical(1))
+    ]
+    if (length(matched) == 1) matched else NA_character_
+  }
+  
+  ini <- mice(df_tmp, maxit=0, print = FALSE)
+  pred <- ini$predictorMatrix
+  
+  pred[,'id'] <- 0
+  pred[, 'sr_scr_rand_group'] <- 0
+  pred['id',] <- 0
+  
+  #imputation method: "" = MICE selects the best one automatically; 2l.pan = best for nested continuous data
+  meth <- rep("", ncol(df_tmp))  # Default to MICE choosing method
+  names(meth) <- names(df_tmp)
+  
+  # probably due to skewness, the plasma variable doesn't get a method chosen automatically
+  crp_plasma_vars <- grep(
+    "^dbs_.*_crp_.*_plasma_.*",
+    names(meth),
+    value = TRUE
+  )
+  
+  if (length(crp_plasma_vars) > 0) {
+    meth[crp_plasma_vars] <- "pmm"
+  }
+  
+  if (restrict_range == "Y"){
+    post <- make.post(df_tmp)
+  }
+  
+  for (var in vars) {
+    missing_outcome <- paste0('missing_', var)
+    pred[, missing_outcome] <- 0
+    
+      if (is.null(pred_spec)){
+    pred[var, ] <- c(0, 1, rep(1, length(vars)), rep(0, length(vars)))
+  } else {
+    pred[var, ] <- pred_spec %>% 
+      dplyr::select(!!sym(var)) %>% 
+      unlist()
+  }
+  
+  # Add safety check
+  if (sum(pred[var, ]) == 0) {
+    warning(paste("Variable", var, "has no predictors!"))
+    # Set default predictors
+    pred[var, ] <- c(0, 1, rep(1, length(vars)), rep(0, length(vars)))
+  }
+      
+  if (restrict_range == "Y" && is.numeric(df_tmp[[var]])) {
+  
+    base_var <- get_base_name(var, names(range_matrix))
+  
+    if (!is.na(base_var)) {
+      post[var] <- paste0(
+        "imp[[j]][, i] <- squeeze(imp[[j]][, i], c(",
+        range_matrix[[base_var]][1], ", ",
+        range_matrix[[base_var]][2], "))"
+      )
+    } else {
+      warning(paste("No range found for", var))
+    }
+  }
+  
+    }
+  
+  print(pred)
+  
+  if (restrict_range == "Y"){
+    imp_tmp <- mice(df_tmp, 
+                    pred = pred, 
+                    maxit = 10, 
+                    # print = FALSE, 
+                    m = 50,
+                    post = post
+                    )
+  } else {
+    imp_tmp <- mice(df_tmp, 
+                    pred = pred, 
+                    maxit = 10, 
+                    # print = FALSE, 
+                    m = 50
+                    )
+  }
+  
+  has_sufficient_data <- function(imp, var) {
+    dat_long <- complete(imp, action = "long", include = TRUE)
+    x <- dat_long[[var]]
+    x <- x[!is.na(x)]
+    length(x) >= 2 && length(unique(x)) > 1
+  }
+      
+  for (var in vars) {
+    missing_outcome <- paste0('missing_', var)
+    miss_count <- sum(df_og[[missing_outcome]])
+  
+    if (miss_count > 0 && has_sufficient_data(imp_tmp, var)) {
+  
+      p1 <- try(plot(imp_tmp, var), silent = TRUE)
+      if (!inherits(p1, "try-error")) print(p1)
+  
+      p2 <- try(densityplot(imp_tmp, as.formula(paste("~", var))), silent = TRUE)
+      if (!inherits(p2, "try-error")) print(p2)
+  
+    } else {
+      message("Skipping plots for ", var, 
+              ": insufficient variation or no imputation")
+    }
+  }
+    
+  
+  cat("\n=== MICE Logged Events ===\n")
+  print(imp_tmp$loggedEvents)
+
+  return(imp_tmp)
+}
+```
+
+
+### Function: scale the imputed values
+
+If higher level = worse, then the scaling should be done with 1.1 and 1.2, while if lower level = worse, then it should be done with 0.8 and 0.9
+
+```{r fx_scale_imputed_wide}
+scale_imputed_values_wide <- function(df_tmp, var) {
+  worse <- map_worse(var)
+  
+  var_prefix <- map_prefix(var)
+  
+  prefixes <- c(paste0(var_prefix, '_base_'),
+              paste0(var_prefix, '_pw4_'),
+              paste0(var_prefix, '_3mo_'))
+  
+  for (prefix in prefixes){
+    outcome <- paste0(prefix, var)
+    missing_var <- paste0("missing_", outcome)
+    
+    if (!outcome %in% names(df_tmp)) next
+    
+    if (worse == "H"){
+      var110 <- paste0(outcome, "_110")
+      var120 <- paste0(outcome, "_120")
+      
+      df_tmp <- df_tmp %>% 
+        mutate(!!sym(var110) := if_else(!!sym(missing_var) == 1, 
+                                        !!sym(outcome) * 1.1,
+                                        !!sym(outcome)),
+               !!sym(var120) := if_else(!!sym(missing_var) == 1, 
+                                        !!sym(outcome) * 1.2,
+                                        !!sym(outcome))
+               )
+    } else if (worse == "L"){
+      var80 <- paste0(outcome, "_80")
+      var90 <- paste0(outcome, "_90")
+      
+      df_tmp <- df_tmp %>% 
+        mutate(!!sym(var80) := if_else(!!sym(missing_var) == 1, 
+                                       !!sym(outcome) * 0.8,
+                                       !!sym(outcome)),
+               !!sym(var90) := if_else(!!sym(missing_var) == 1, 
+                                       !!sym(outcome) * 0.9,
+                                       !!sym(outcome))
+               )
+    }
+  }
+  
+  print(tail(df_tmp %>% filter(!!sym(missing_var) == 1)))
+  
+  return(df_tmp)
+}
+```
+
+### Function: Simple linear regression model with original data
+
+```{r fx-lm-analysis-wide}
+run_lm_og_wide <- function(df_og = df, outcome, phase = '3mo', covar_formula = NULL, return_table = FALSE, exc_outlier = FALSE, ref_level = 'hmp_full'){
+  
+  df_og <- df_og %>%
+    mutate(sr_scr_rand_group = relevel(factor(sr_scr_rand_group), ref = ref_level))
+  
+  var_prefix <- map_prefix(outcome)
+  
+  base_var <- paste0(var_prefix, '_base_', outcome)
+  outcome_var <- paste0(var_prefix, '_', phase, '_', outcome)
+  
+  if (exc_outlier == TRUE){ # update df_og if necessary
+    if (str_detect(var_prefix, "mib")){
+      # only exclude > median + 1.5xIQR
+        outcome_med <- median(df_og[[outcome_var]], na.rm = TRUE)
+        outcome_IQR_val <- IQR(df_og[[outcome_var]], na.rm = TRUE)
+        outcome_upper_bound <- outcome_med + 1.5 * outcome_IQR_val
+        base_med <- median(df_og[[base_var]], na.rm = TRUE)
+        base_IQR_val <- IQR(df_og[[base_var]], na.rm = TRUE)
+        base_upper_bound <- base_med + 1.5 * base_IQR_val
+
+        df_og <- df_og %>%
+        mutate(!!sym(outcome_var) := ifelse((!!sym(outcome_var) > outcome_upper_bound), NA, !!sym(outcome_var)),
+               !!sym(base_var) := ifelse((!!sym(base_var) > base_upper_bound), NA, !!sym(base_var)))
+    } else {
+      outcome_mean_y <- mean(df_og[[outcome_var]], na.rm = TRUE)
+      outcome_sd_y <- sd(df_og[[outcome_var]], na.rm = TRUE)
+      outcome_upper_y <- outcome_mean_y + 3 * outcome_sd_y
+      outcome_lower_y <- outcome_mean_y - 3 * outcome_sd_y
+      base_mean_y <- mean(df_og[[base_var]], na.rm = TRUE)
+      base_sd_y <- sd(df_og[[base_var]], na.rm = TRUE)
+      base_upper_y <- base_mean_y + 3 * base_sd_y
+      base_lower_y <- base_mean_y - 3 * base_sd_y
+      
+      df_og <- df_og %>%
+        mutate(!!sym(outcome_var) := ifelse((!!sym(outcome_var) > outcome_upper_y | !!sym(outcome_var) < outcome_lower_y), NA, !!sym(outcome_var)),
+               !!sym(base_var) := ifelse((!!sym(base_var) > base_upper_y | !!sym(base_var) < base_lower_y), NA, !!sym(base_var)))
+    }
+  }
+  
+  cat("\nOutcome:", outcome_var,"(Original, NOT imputed) -----------------------\n")
+  og_formula <- as.formula(paste(outcome_var, "~ ", covar_formula, base_var, " + sr_scr_rand_group"))
+  cat('\n', as.character(og_formula), '\n\n')
+  og_est <- lm(og_formula, data = df_og)
+  summary_og_est <- summary(og_est)
+  fixed_effects <- summary_og_est$coefficients
+  fixed_effects_rounded <- round(fixed_effects, 4)
+  
+  confint_og_est <- confint(og_est)
+  confint_fixed <- confint_og_est[rownames(confint_og_est) %in% rownames(fixed_effects), ]
+  confint_fixed_rounded <- round(confint_fixed, 4)
+  
+  results_table <- cbind(
+    Estimate = fixed_effects_rounded[, "Estimate"],
+    Std_Error = fixed_effects_rounded[, "Std. Error"],
+    t_value = fixed_effects_rounded[, "t value"],
+    p_value = fixed_effects_rounded[, "Pr(>|t|)"],
+    `CI_2.5%` = confint_fixed_rounded[, 1],
+    `CI_97.5%` = confint_fixed_rounded[, 2]
+    )
+  
+  print(results_table)
+  
+  cat('\n****** Effect Size summary ******\n')
+  effect_df <- compute_effect_size_wide(estimation = og_est, 
+                                        data = df_og,
+                                        base_var = base_var,
+                                        outcome_var = outcome_var,
+                                        preMI = 'Y',
+                                        ref_level = ref_level)
+  
+  if (return_table == TRUE){
+    if(str_detect(outcome_var, '_pw4_')){
+      time_desc <- "Week 4 vs. Baseline"
+      } else if (str_detect(outcome_var, '_3mo_')){
+        time_desc <- "Week 17 vs. Baseline"
+      }
+    
+    if (ref_level == 'hmp_full'){
+      group_comparison <- c("Full_vs_Active", "Full_vs_UC")
+      group1_term <- "sr_scr_rand_grouphmp_active"
+    } else if (ref_level == 'hmp_active'){
+      group_comparison <- c("Active_vs_Full", "Active_vs_UC")
+      group1_term <- "sr_scr_rand_grouphmp_full"
+    }
+    
+    summary_table <- data.frame(
+      outcome = outcome,
+      comparison = rep(group_comparison, each = 1),
+      timepoint = rep(c(time_desc), 2),
+      
+      # Coefficients
+      coef = c(
+        fixed_effects[group1_term, "Estimate"],
+        fixed_effects["sr_scr_rand_groupuc", "Estimate"]
+        ),
+        
+      # Coefficient CIs
+      coef_ci_lower = c(
+        confint_fixed[group1_term, 1],
+        confint_fixed["sr_scr_rand_groupuc", 1]
+      ),
+      coef_ci_upper = c(
+        confint_fixed[group1_term, 2],
+        confint_fixed["sr_scr_rand_groupuc", 2]
+      ),
+        
+      # P-values
+      p_value = c(
+        fixed_effects[group1_term, "Pr(>|t|)"],
+        fixed_effects["sr_scr_rand_groupuc", "Pr(>|t|)"]
+      ),
+        
+      # Effect sizes
+      d = effect_df$d,
+      d_ci_lower = effect_df$ci_lower,
+      d_ci_upper = effect_df$ci_upper,
+      
+      stringsAsFactors = FALSE
+      )
+     
+    # Round numeric columns
+    summary_table <- summary_table %>%
+      mutate(across(where(is.numeric), ~round(., 4)))
+    
+    return(list(model = og_est, results_summary = summary_table, ci_fixed = confint_fixed))
+    }
+}
+```
+
+
+
+### Function: Simple linear regression model with imputed data
+
+There are four models:
+- Original model
+- Model with imputed data
+- Model with imputed data, in which the data is scaled to be 10% worse
+- Model with imputed data, in which the data is scaled to be 20% worse
+
+```{r fx-sensitvity-analysis-wide}
+run_sensitivity_imputed_wide <- function(df_og, df_imp, outcome, covariates = NULL, return_table = FALSE, exc_outlier = FALSE, ref_level = 'hmp_full'){
+  worse <- map_worse(outcome)
+  
+  df_og <- df_og %>%
+    mutate(sr_scr_rand_group = relevel(factor(sr_scr_rand_group), ref = ref_level))
+  
+  df_imp <- df_imp %>%
+    mutate(sr_scr_rand_group = relevel(factor(sr_scr_rand_group), ref = ref_level))
+  
+  if (!is.null(covariates)){
+    covar_formula <- paste0(covariates, collapse=" + ")
+    covar_formula <- paste0(covar_formula, "+ ")
+  } else {
+    covar_formula <- NULL
+  }
+  
+  print(outcome)
+  var_prefix <- map_prefix(outcome)
+  print(var_prefix)
+  
+  # Remove redundant prefix from outcome name
+  outcome_suffix <- sub(paste0("^", var_prefix, "_"), "", outcome)
+  # outcome_suffix <- sub(paste0("_", var_prefix, "_"), "_", outcome_suffix)
+  
+  base_var <- paste0(var_prefix, '_base_', outcome_suffix)
+  outcome_vars <- c(paste0(var_prefix, '_pw4_', outcome_suffix), 
+                    paste0(var_prefix, '_3mo_', outcome_suffix))
+  
+  # Store results if return_table = TRUE
+  if (return_table) {
+    models_list <- list()
+    tables_list <- list()
+    ci_fixed_list <- list()
+  }
+  
+  for (outcome_var in outcome_vars){
+    # Skip if outcome variable doesn't exist
+    if (!outcome_var %in% names(df_og)) {
+      cat("Skipping", outcome_var, "- not found in dataframe\n")
+      next
+    }
+    
+    if (str_detect(outcome_var, 'pw4')){
+      timepoint <- "Week 4 vs. Baseline"
+      phase <- "pw4"
+      cat("\nTime: Week 4 ===================================================================\n")
+    } else if (str_detect(outcome_var, '3mo')){
+      timepoint <- "Week 17 vs. Baseline"
+      phase <- "3mo"
+      cat("\nTime: 3-month follow-up ===================================================================\n")
+    }
+    
+    orig_results <- run_lm_og_wide(df_og = df_og, 
+                                   outcome = outcome, 
+                                   phase = phase, 
+                                   covar_formula = covar_formula, 
+                                   exc_outlier = exc_outlier, 
+                                   ref_level = ref_level,
+                                   return_table = TRUE)
+    
+    og_summary <- orig_results$results_summary
+    og_summary <- og_summary %>% 
+      mutate(model_type = "Original") %>% 
+      relocate(outcome, model_type)
+    
+    if (exc_outlier == TRUE){ #exc outlier (>3SDs) if necessary
+       df_imp_exc <- df_imp %>%
+        group_by(.imp) %>%
+        mutate(
+          mean_val = mean(!!sym(outcome_var), na.rm = TRUE),
+          sd_val = sd(!!sym(outcome_var), na.rm = TRUE),
+          threshold_val = (mean_val + 3*sd_val),
+          !!sym(outcome_var) := ifelse(
+            !!sym(outcome_var) > threshold_val,
+            NA,
+            !!sym(outcome_var))
+          ) %>%
+        mutate(
+          mean_val_base = mean(!!sym(base_var), na.rm = TRUE),
+          sd_val_base = sd(!!sym(base_var), na.rm = TRUE),
+          threshold_val_base = (mean_val_base + 3*sd_val_base),
+          !!sym(base_var) := ifelse(
+            !!sym(base_var) > threshold_val_base,
+            NA,
+            !!sym(base_var))
+          ) %>%
+        ungroup() %>%
+        dplyr::select(-mean_val, -sd_val, -threshold_val,
+                      -mean_val_base, -sd_val_base, -threshold_val_base)
+
+      mids_tmp <- mice::as.mids(df_imp_exc)
+      } else {
+        mids_tmp <- mice::as.mids(df_imp)
+      }
+    
+    process_model <- function(outcome_name, scaled_perc, model_label) {
+      cat("\nOutcome:", outcome_name, "(", model_label, ") -----------------------\n")
+      
+      outcome_var_scaled <- paste0(outcome_name, scaled_perc)
+      base_var_scaled <- paste0(base_var, scaled_perc)
+      
+      model_check <- with(mids_tmp, 
+                          lm(as.formula(paste(outcome_var_scaled, "~ ", covar_formula, base_var_scaled, " + sr_scr_rand_group"))))
+      
+      est <- pool(model_check)
+      summary_est <- summary(est, conf.int = TRUE)
+      ci_fixed <- summary_est[, c("2.5 %", "97.5 %")]
+rownames(ci_fixed) <- summary_est$term
+ci_fixed <- round(ci_fixed, 4)
+      summary_est[, 2:ncol(summary_est)] <- round(summary_est[, 2:ncol(summary_est)], 4)
+      
+      print(summary_est)
+      
+      effect_df <- compute_effect_size_wide(estimation = est, 
+                          data = mids_tmp, 
+                          base_var = base_var_scaled, 
+                          outcome_var = outcome_var_scaled,
+                          preMI = 'N',
+                          ref_level = ref_level)
+      
+      if (return_table) {
+        if (ref_level == 'hmp_full'){
+          time1_group1_idx <- which(summary_est$term == "sr_scr_rand_grouphmp_active")
+          group_comparison = c("Full_vs_Active", "Full_vs_UC")
+        } else if (ref_level == 'hmp_active'){
+          time1_group1_idx <- which(summary_est$term == "sr_scr_rand_grouphmp_full")
+          group_comparison = c("Active_vs_Full", "Active_vs_UC")
+        }
+        time1_uc_idx <- which(summary_est$term == "sr_scr_rand_groupuc")
+        
+        summary_table <- data.frame(
+          outcome = outcome_name,
+          model_type = model_label,
+          comparison = rep(group_comparison, each = 1),
+          timepoint = rep(timepoint, 2),
+          coef = c(summary_est$estimate[time1_group1_idx],
+                  summary_est$estimate[time1_uc_idx]),
+          coef_ci_lower = c(summary_est$`2.5 %`[time1_group1_idx],
+                           summary_est$`2.5 %`[time1_uc_idx]),
+          coef_ci_upper = c(summary_est$`97.5 %`[time1_group1_idx],
+                           summary_est$`97.5 %`[time1_uc_idx]),
+          p_value = c(summary_est$p.value[time1_group1_idx],
+                     summary_est$p.value[time1_uc_idx]),
+          d = effect_df$d,
+          d_ci_lower = effect_df$ci_lower,
+          d_ci_upper = effect_df$ci_upper,
+          stringsAsFactors = FALSE
+        ) %>%
+          mutate(across(where(is.numeric), ~round(., 4)))
+        
+        return(list(
+          table = summary_table,
+          ci_fixed = ci_fixed, 
+          model = list(
+            model = model_check,
+            pooled = est,
+            effect_size = effect_df,
+            outcome_name = outcome_name,
+            model_type = model_label
+          )
+        ))
+      }
+    }
+    
+    # Process all models
+    result_imp <- process_model(outcome_var, "", "Imputed")
+    if (return_table && !is.null(result_imp)) {
+      og_model_key <- paste0(phase, "_original")
+      tables_list[[og_model_key]] <- og_summary
+      model_key <- paste0(phase, "_imputed")
+      models_list[[model_key]] <- result_imp$model
+      tables_list[[model_key]] <- result_imp$table
+      ci_fixed_list[[model_key]] <- result_imp$ci_fixed
+    }
+    
+    if (worse == "H") {
+      result_110 <- process_model(outcome_var, "_110", "Imputed 110%")
+      result_120 <- process_model(outcome_var, "_120", "Imputed 120%")
+      if (return_table) {
+        if (!is.null(result_110)) {
+          model_key <- paste0(phase, "_imputed_110")
+          models_list[[model_key]] <- result_110$model
+          tables_list[[model_key]] <- result_110$table
+          ci_fixed_list[[model_key]] <- result_imp$ci_fixed
+        }
+        if (!is.null(result_120)) {
+          model_key <- paste0(phase, "_imputed_120")
+          models_list[[model_key]] <- result_120$model
+          tables_list[[model_key]] <- result_120$table
+          ci_fixed_list[[model_key]] <- result_imp$ci_fixed
+        }
+      }
+    } else if (worse == "L") {
+      result_90 <- process_model(outcome_var, "_90", "Imputed 90%")
+      result_80 <- process_model(outcome_var, "_80", "Imputed 80%")
+      if (return_table) {
+        if (!is.null(result_90)) {
+          model_key <- paste0(phase, "_imputed_90")
+          models_list[[model_key]] <- result_90$model
+          tables_list[[model_key]] <- result_90$table
+          ci_fixed_list[[model_key]] <- result_imp$ci_fixed
+        }
+        if (!is.null(result_80)) {
+          model_key <- paste0(phase, "_imputed_80")
+          models_list[[model_key]] <- result_80$model
+          tables_list[[model_key]] <- result_80$table
+          ci_fixed_list[[model_key]] <- result_imp$ci_fixed
+        }
+      }
+    }
+  }
+  
+  if (return_table) {
+    if (length(tables_list) == 0) {
+      cat("Warning: No valid models were created for", outcome, "\n")
+      return(list(
+        summary_table = data.frame(),
+        models = list(),
+        outcome = outcome
+      ))
+    }
+    
+    return(list(
+      summary_table = bind_rows(tables_list),
+      ci_fixed = ci_fixed_list,
+      models = models_list,
+      outcome = outcome
+    ))
+  }
+}
+```
+
+
+### Function: Simple linear regression model with original data and moderation
+
+```{r fx-lm-analysis-wide-moderation}
+run_lm_og_wide_moderation <- function(df_og = df, outcome, phase = '3mo', covar_formula = NULL, return_table = FALSE, moderator_var){
+    var_prefix <- map_prefix(outcome)
+  
+    base_var <- paste0(var_prefix, '_base_', outcome)
+    outcome_var <- paste0(var_prefix, '_', phase, '_', outcome)
+    
+    activeFull <- "sr_scr_rand_grouphmp_active"
+    ucFull <- "sr_scr_rand_groupuc"
+    activeFull_moderation <- paste0(activeFull, ":", moderator_var)
+    ucFull_moderation <- paste0(ucFull, ":", moderator_var)
+    
+    cat("\nOutcome:", outcome_var,"(Original, NOT imputed) -----------------------\n")
+    cat("\nModerator:", moderator_var,"-----------------------\n")
+
+    og_formula <- as.formula(paste(outcome_var, "~ ", covar_formula, base_var, " + sr_scr_rand_group*", moderator_var))
+
+    cat('\n', as.character(og_formula), '\n\n')
+    og_est <- lm(og_formula, data = df_og)
+    summary_og_est <- summary(og_est)
+    fixed_effects <- summary_og_est$coefficients
+    fixed_effects_rounded <- round(fixed_effects, 4)
+    
+    confint_og_est <- confint(og_est)
+    confint_fixed <- confint_og_est[rownames(confint_og_est) %in% rownames(fixed_effects), ]
+    confint_fixed_rounded <- round(confint_fixed, 4)
+    
+    results_table <- cbind(
+    Estimate = fixed_effects_rounded[, "Estimate"],
+    Std_Error = fixed_effects_rounded[, "Std. Error"],
+    t_value = fixed_effects_rounded[, "t value"],
+    p_value = fixed_effects_rounded[, "Pr(>|t|)"],
+    `CI_2.5%` = confint_fixed_rounded[, 1],
+    `CI_97.5%` = confint_fixed_rounded[, 2]
+    )
+    
+    print(results_table)
+    
+    cat('\n****** Effect Size summary ******\n')
+    effect_df <- compute_effect_size_wide_moderation(estimation = og_est, 
+                                          data = df_og,
+                                          base_var = base_var, 
+                                          outcome_var = outcome_var,
+                                          preMI = 'Y',
+                                          moderator_var = moderator_var)
+    
+    if (return_table == TRUE){
+      if(str_detect(outcome_var, '_pw4_')){
+        time_desc <- "Week 4 vs. Baseline"
+      } else if (str_detect(outcome_var, '_3mo_')){
+        time_desc <- "Week 17 vs. Baseline"
+      }
+      summary_table <- data.frame(
+        outcome = outcome,
+        comparison = rep(c("Full_vs_Active", "Full_vs_UC"), each = 3),
+        timepoint = rep(c(time_desc), 2),
+        effect = effect_df$effect,
+        
+        # Coefficients
+        coef = c(
+          fixed_effects[activeFull, "Estimate"],
+          fixed_effects[activeFull_moderation, "Estimate"],
+          NA,
+          fixed_effects[ucFull, "Estimate"],
+          fixed_effects[ucFull_moderation, "Estimate"],
+          NA
+        ),
+        
+        # Coefficient CIs
+        coef_ci_lower = c(
+          confint_fixed[activeFull, 1],
+          confint_fixed[activeFull_moderation, 1],
+          NA,
+          confint_fixed[ucFull, 1],
+          confint_fixed[ucFull_moderation, 1],
+          NA
+        ),
+        coef_ci_upper = c(
+          confint_fixed[activeFull, 2],
+          confint_fixed[activeFull_moderation, 2],
+          NA,
+          confint_fixed[ucFull, 2],
+          confint_fixed[ucFull_moderation, 2],
+          NA
+        ),
+        
+        # P-values
+        p_value = c(
+          fixed_effects[activeFull, "Pr(>|t|)"],
+          fixed_effects[activeFull_moderation, "Pr(>|t|)"],
+          NA,
+          fixed_effects[ucFull, "Pr(>|t|)"],
+          fixed_effects[ucFull_moderation, "Pr(>|t|)"],   
+          NA
+        ),
+        
+        # Effect sizes
+        d = effect_df$d,
+        d_ci_lower = effect_df$ci_lower,
+        d_ci_upper = effect_df$ci_upper,
+        
+        stringsAsFactors = FALSE
+      )
+     
+       # Round numeric columns
+    summary_table <- summary_table %>%
+      mutate(across(where(is.numeric), ~round(., 4)))
+    
+    return(list(model = og_est, results_summary = summary_table, ci_fixed = confint_fixed))
+
+    }
+}
+```
+
+
+### Function: Effect size computation for wide format data
+
+```{r fx_effect_size_imputed_wide}
+compute_effect_size_wide <- function(estimation, data, base_var, outcome_var, preMI = c('Y', 'N'), ref_level = 'hmp_full'){
+  preMI <- match.arg(preMI)
+  
+  if (ref_level == 'hmp_full'){
+    group1_term <- "sr_scr_rand_grouphmp_active"
+    group_comparison <- c("full_vs_active", 
+                          "full_vs_uc")
+  } else if (ref_level == 'hmp_active'){
+    group1_term <- "sr_scr_rand_grouphmp_full"
+    group_comparison <- c("active_vs_full", 
+                          "active_vs_uc")
+  }
+  
+  if (preMI == 'Y') {
+    if (inherits(estimation, "lm") && !inherits(estimation, "vglm")) {
+      sum_coef <- summary(estimation)$coefficients
+      
+      est_activeFull <- sum_coef[group1_term, "Estimate"]
+      est_ucGroup1 <- sum_coef["sr_scr_rand_groupuc", "Estimate"]
+      
+    } else {
+      # everything else: vglm (Tobit), etc.
+      coefs <- coef(estimation)
+      if (is.matrix(coefs)) coefs <- coefs[, 1]
+      
+      est_activeFull <- coefs[group1_term]
+      est_ucGroup1 <- coefs["sr_scr_rand_groupuc"]
+    }
+
+  } else if (preMI == 'N') {
+  est_activeFull <- summary(estimation) %>% 
+    filter(term == group1_term) %>% 
+    pull(estimate)
+  est_ucGroup1 <- summary(estimation) %>% 
+    filter(term == "sr_scr_rand_groupuc") %>% 
+    pull(estimate)
+  }
+  
+  if (inherits(data, "mids")) {
+    # Use the first imputed dataset for calculating sample sizes and SDs
+    data <- mice::complete(data, action = 1)
+  } 
+  
+  #stat from original df~~~~~~~~~~~~~
+  full_n <- data %>% filter(sr_scr_rand_group == 'hmp_full' & 
+                            !is.na(!!sym(base_var)) &
+                            !is.na(!!sym(outcome_var))) %>% nrow()
+  active_n <- data %>% filter(sr_scr_rand_group == 'hmp_active' & 
+                            !is.na(!!sym(base_var)) &
+                            !is.na(!!sym(outcome_var))) %>% nrow()
+  uc_n <- data %>% filter(sr_scr_rand_group == 'uc' & 
+                            !is.na(!!sym(base_var)) &
+                            !is.na(!!sym(outcome_var))) %>% nrow()
+  sd_base_full <- sd((data %>%
+                        filter(sr_scr_rand_group %in% c('hmp_full')) %>%
+                        dplyr::select(!!sym(base_var)) %>% 
+                        unlist()),
+                     na.rm = TRUE)
+  sd_base_active <- sd((data %>%
+                        filter(sr_scr_rand_group %in% c('hmp_active')) %>%
+                        dplyr::select(!!sym(base_var)) %>% 
+                        unlist()),
+                     na.rm = TRUE)
+  sd_base_uc <- sd((data %>% 
+                          filter(sr_scr_rand_group %in% c('uc')) %>%
+                          dplyr::select(!!sym(base_var)) %>% 
+                          unlist()),
+                       na.rm = TRUE)
+  sd_base_activeFull <- sqrt(((full_n - 1)*sd_base_full^2 + (active_n - 1)*sd_base_active^2) / (full_n + active_n - 2))
+  sd_base_ucFull <- sqrt(((full_n - 1)*sd_base_full^2 + (uc_n - 1)*sd_base_uc^2) / (full_n + uc_n - 2))
+  sd_base_ucActive <- sqrt(((active_n - 1)*sd_base_active^2 + (uc_n - 1)*sd_base_uc^2) / (active_n + uc_n - 2))
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  
+  smd_activeFull <- est_activeFull / sd_base_activeFull
+  ci_activeFull <- ci.smd(smd = smd_activeFull, n.1 = full_n, n.2 = active_n)
+  
+  cat('\nIntervention vs Active Ctrl******\n')
+  cat('time 1 x group Estimate:', est_activeFull, '\n')
+  cat('Intervention sample size:', full_n, '\n')
+  cat('Active Ctrl sample size:', active_n, '\n')
+  cat('Intervention baseline SD:', round(sd_base_full, 4), '\n')
+  cat('Active Ctrl baseline SD:', round(sd_base_active, 4), '\n')
+  cat('Pooled SD:', round(sd_base_activeFull, 4), '\n')
+  cat('Effect size:\n', 
+      est_activeFull, ' /', sd_base_activeFull, '=', smd_activeFull, '\n')
+  cat('95% CI:', round(ci_activeFull$Lower, 4), ',', round(ci_activeFull$Upper, 4), '\n')
+  
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  if (ref_level == 'hmp_full'){
+    smd_ucGroup1 <- est_ucGroup1 / sd_base_ucFull
+    ci_ucGroup1 <- ci.smd(smd = smd_ucGroup1, n.1 = full_n, n.2 = uc_n)
+    
+    cat('\nIntervention vs Usual Care******\n')
+    cat('time 1 x group Estimate:', est_ucGroup1, '\n')
+    cat('Intervention sample size:', full_n, '\n')
+    cat('Usual Care sample size:', uc_n, '\n')
+    cat('Intervention baseline SD:', round(sd_base_full, 4), '\n')
+    cat('Usual Care baseline SD:', round(sd_base_uc, 4), '\n')
+    cat('Pooled SD:', round(sd_base_ucFull, 4), '\n')
+    cat('Effect size:\n', 
+        est_ucGroup1, ' /', sd_base_ucFull, '=', smd_ucGroup1, '\n')
+    cat('95% CI:', round(ci_ucGroup1$Lower, 4), ',', round(ci_ucGroup1$Upper, 4), '\n')
+  } else if (ref_level == 'hmp_active'){
+    smd_ucGroup1 <- est_ucGroup1 / sd_base_ucActive
+    ci_ucGroup1 <- ci.smd(smd = smd_ucGroup1, n.1 = active_n, n.2 = uc_n)
+    
+    cat('\nActive Ctrl vs Usual Care******\n')
+    cat('time 1 x group Estimate:', est_ucGroup1, '\n')
+    cat('Active Ctrl sample size:', active_n, '\n')
+    cat('Usual Care sample size:', uc_n, '\n')
+    cat('Active Ctrl baseline SD:', round(sd_base_active, 4), '\n')
+    cat('Usual Care baseline SD:', round(sd_base_uc, 4), '\n')
+    cat('Pooled SD:', round(sd_base_ucActive, 4), '\n')
+    cat('Effect size:\n', 
+        est_ucGroup1, ' /', sd_base_ucActive, '=', smd_ucGroup1, '\n')
+    cat('95% CI:', round(ci_ucGroup1$Lower, 4), ',', round(ci_ucGroup1$Upper, 4), '\n')
+  }
+  
+  
+  effect_df <- data.frame(
+    group = group_comparison,
+    effect_type = c(
+      "T1",
+      "T1"
+    ),
+    d = c(
+      smd_activeFull,
+      smd_ucGroup1
+    ),
+    ci_lower = c(
+      ci_activeFull$Lower,
+      ci_ucGroup1$Lower
+    ),
+    ci_upper = c(
+      ci_activeFull$Upper,
+      ci_ucGroup1$Upper
+    )
+  )
+  
+  return(effect_df)
+}
+```
+
+
+### Function: Effect size computation with moderation for wide format data
+
+```{r fx_effect_size_imputed_wide_moderation}
+compute_effect_size_wide_moderation <- function(estimation, data, base_var, outcome_var, preMI = c('Y', 'N'), moderator_var){
+  preMI <- match.arg(preMI)
+  
+  active_moderation <- paste0("sr_scr_rand_grouphmp_active:", moderator_var)
+  uc_moderation <- paste0("sr_scr_rand_groupuc:", moderator_var)  
+    
+  if (preMI == 'Y') {
+    sum_coef <- summary(estimation)$coefficients
+    
+    est_activeFull <- sum_coef["sr_scr_rand_grouphmp_active", "Estimate"]
+    est_activeFull_moderation <- sum_coef[active_moderation, "Estimate"]
+    est_ucFull <- sum_coef["sr_scr_rand_groupuc", "Estimate"]
+    est_ucFull_moderation <- sum_coef[uc_moderation, "Estimate"]
+  } else if (preMI == 'N') {
+  est_activeFull <- summary(estimation) %>% 
+    filter(term == "sr_scr_rand_grouphmp_active") %>% 
+    pull(estimate)
+  est_activeFull_moderation <- summary(estimation) %>% 
+    filter(term == active_moderation) %>% 
+    pull(estimate)
+  est_ucFull <- summary(estimation) %>% 
+    filter(term == "sr_scr_rand_groupuc") %>% 
+    pull(estimate)
+  est_ucFull_moderation <- summary(estimation) %>% 
+    filter(term == uc_moderation) %>% 
+    pull(estimate)
+  }
+  
+  if (inherits(data, "mids")) {
+    # Use the first imputed dataset for calculating sample sizes and SDs
+    data <- mice::complete(data, action = 1)
+  } 
+  
+  #stat from original df~~~~~~~~~~~~~
+  full_n <- data %>% filter(sr_scr_rand_group == 'hmp_full' & 
+                            !is.na(!!sym(base_var)) &
+                            !is.na(!!sym(outcome_var))) %>% nrow()
+  active_n <- data %>% filter(sr_scr_rand_group == 'hmp_active' & 
+                            !is.na(!!sym(base_var)) &
+                            !is.na(!!sym(outcome_var))) %>% nrow()
+  uc_n <- data %>% filter(sr_scr_rand_group == 'uc' & 
+                            !is.na(!!sym(base_var)) &
+                            !is.na(!!sym(outcome_var))) %>% nrow()
+
+  sd_base_full <- sd((data %>%
+                        filter(sr_scr_rand_group %in% c('hmp_full')) %>%
+                        dplyr::select(!!sym(base_var)) %>% 
+                        unlist()),
+                     na.rm = TRUE)
+  sd_base_active <- sd((data %>%
+                        filter(sr_scr_rand_group %in% c('hmp_active')) %>%
+                        dplyr::select(!!sym(base_var)) %>% 
+                        unlist()),
+                     na.rm = TRUE)
+  sd_base_uc <- sd((data %>% 
+                          filter(sr_scr_rand_group %in% c('uc')) %>%
+                          dplyr::select(!!sym(base_var)) %>% 
+                          unlist()),
+                       na.rm = TRUE)
+  sd_base_activeFull <- sqrt(((full_n - 1)*sd_base_full^2 + (active_n - 1)*sd_base_active^2) / (full_n + active_n - 2))
+  sd_base_ucFull <- sqrt(((full_n - 1)*sd_base_full^2 + (uc_n - 1)*sd_base_uc^2) / (full_n + uc_n - 2))
+  
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  
+  # mean of moderator
+  moderator_mean <- mean(data[[moderator_var]], na.rm = TRUE)
+  
+  smd_activeFull <- est_activeFull / sd_base_activeFull
+  ci_activeFull <- ci.smd(smd = smd_activeFull, n.1 = full_n, n.2 = active_n)
+  
+  smd_activeFull_moderation <- (est_activeFull_moderation*moderator_mean) / sd_base_activeFull
+  ci_activeFull_moderation <- ci.smd(smd = smd_activeFull_moderation, n.1 = full_n, n.2 = active_n)
+  
+  smd_activeFull_full <- (est_activeFull + (est_activeFull_moderation*moderator_mean)) / sd_base_activeFull
+  ci_activeFull_full <- ci.smd(smd = smd_activeFull_full, n.1 = full_n, n.2 = active_n)
+  
+  cat('\nMean of', moderator_var ,'******\n')
+  cat(moderator_mean, '\n')
+  
+  cat('\nIntervention vs Active Ctrl******\n')
+  cat('Group Estimate:', est_activeFull, '\n')
+  cat('Group *', moderator_var, 'Estimate:', est_activeFull_moderation, '\n')
+  cat('Intervention sample size:', full_n, '\n')
+  cat('Active Ctrl sample size:', active_n, '\n')
+  cat('Group effect size:\n', 
+      est_activeFull, ' /', sd_base_activeFull, '=', smd_activeFull, '\n')
+  cat('95% CI:', round(ci_activeFull$Lower, 4), ',', round(ci_activeFull$Upper, 4), '\n')
+  
+  cat('Interaction effect size:\n', 
+      est_activeFull_moderation, '*', moderator_mean, '/', sd_base_activeFull, '=', smd_activeFull_moderation, '\n')
+  cat('95% CI:', round(ci_activeFull_moderation$Lower, 4), ',', round(ci_activeFull_moderation$Upper, 4), '\n')
+  
+  cat('Full treatment effect size:\n', 
+      '(', est_activeFull, '+ (', est_activeFull_moderation, '*', moderator_mean, '))/', sd_base_activeFull, '=', smd_activeFull_full, '\n')
+  cat('95% CI:', round(ci_activeFull_full$Lower, 4), ',', round(ci_activeFull_full$Upper, 4), '\n')
+  
+  #~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  
+  smd_ucFull <- est_ucFull / sd_base_ucFull
+  ci_ucFull <- ci.smd(smd = smd_ucFull, n.1 = full_n, n.2 = uc_n)
+  
+  smd_ucFull_moderation <- (est_ucFull_moderation*moderator_mean) / sd_base_ucFull
+  ci_ucFull_moderation <- ci.smd(smd = smd_ucFull_moderation, n.1 = full_n, n.2 = uc_n)
+  
+  smd_ucFull_full <- (est_ucFull + (est_ucFull_moderation*moderator_mean)) / sd_base_ucFull
+  ci_ucFull_full <- ci.smd(smd = smd_ucFull_full, n.1 = full_n, n.2 = uc_n)
+  
+  cat('\nIntervention vs Usual Care******\n')
+  cat('Group Estimate:', est_ucFull, '\n')
+  cat('Group *', moderator_var, 'Estimate:', est_ucFull_moderation, '\n')
+  cat('Intervention sample size:', full_n, '\n')
+  cat('Usual Care sample size:', uc_n, '\n')
+  cat('Group effect size:\n', 
+      est_ucFull, ' /', sd_base_ucFull, '=', smd_ucFull, '\n')
+  cat('95% CI:', round(ci_ucFull$Lower, 4), ',', round(ci_ucFull$Upper, 4), '\n')
+  
+  cat('Interaction effect size:\n', 
+      est_ucFull_moderation, '*', moderator_mean, '/', sd_base_ucFull, '=', smd_ucFull_moderation, '\n')
+  cat('95% CI:', round(ci_ucFull_moderation$Lower, 4), ',', round(ci_ucFull_moderation$Upper, 4), '\n')
+  
+  cat('Full treatment effect size:\n', 
+      '(', est_ucFull, '+ (', est_ucFull_moderation, '*', moderator_mean, '))/', sd_base_ucFull, '=', smd_ucFull_full, '\n')
+  cat('95% CI:', round(ci_ucFull_full$Lower, 4), ',', round(ci_ucFull_full$Upper, 4), '\n')
+  
+  effect_df <- data.frame(
+    group = c(
+      "full_vs_active", "full_vs_active", "full_vs_active", 
+      "full_vs_uc", "full_vs_uc", "full_vs_uc"
+    ),
+    effect_type = c(
+      "T1", "T1", "T1",
+      "T1", "T1","T1"
+    ),
+    effect = c(
+      "Group", "Interaction", "Full effect",
+      "Group", "Interaction", "Full effect"
+      ),
+    d = c(
+      smd_activeFull, smd_activeFull_moderation, smd_activeFull_full,
+      smd_ucFull, smd_ucFull_moderation, smd_ucFull_full
+    ),
+    ci_lower = c(
+      ci_activeFull$Lower, ci_activeFull_moderation$Lower, ci_activeFull_full$Lower,
+      ci_ucFull$Lower, ci_ucFull_moderation$Lower, ci_ucFull_full$Lower
+    ),
+    ci_upper = c(
+      ci_activeFull$Upper, ci_activeFull_moderation$Upper, ci_activeFull_full$Upper,
+      ci_ucFull$Upper, ci_ucFull_moderation$Upper, ci_ucFull_full$Upper
+    )
+  )
+  
+  return(effect_df)
+}
+```
+
+
+## DBS functions
+### For tables
+```{r dbs_tables}
+
+dbs_results <- function(est, target_var, smd_results, model_name, ref_level = 'hmp_full'){
+
+# extract coef and CI
+# lm: uses confint(), which uses t — correct for OLS
+# vglm: uses 1.96 * se — correct for MLE/Tobit
+  if (inherits(est, "lm") && !inherits(est, "vglm")) {
+    summary_est <- summary(est)
+    fixed_effects <- summary_est$coefficients
+    
+    confint_est <- confint(est)
+    confint_fixed <- confint_est[rownames(confint_est) %in% rownames(fixed_effects), ]
+  
+  } else {
+    # vglm / Tobit
+    summary_est <- summary(est)
+    coef_mat <- coef(summary_est)  # matrix with Estimate, Std. Error, z, p
+    
+    # Keep only the mean equation rows (drop the log(scale) row for Tobit)
+    fixed_effects <- coef_mat[!grepl("^log\\(scale\\)", rownames(coef_mat)), , drop = FALSE]
+    
+    z <- qnorm(0.975)
+    se <- fixed_effects[, "Std. Error"]
+    estimate <- fixed_effects[, "Estimate"]
+        
+    # p-value column is actually Pr(>|z|) 
+    # Rename p-value column to match lm's "Pr(>|t|)" so table indexing works uniformly
+    p_col <- grep("^Pr", colnames(fixed_effects), value = TRUE)
+    colnames(fixed_effects)[colnames(fixed_effects) == p_col] <- "Pr(>|t|)"
+    
+    confint_fixed <- cbind(
+      "2.5 %"  = estimate - z * se,
+      "97.5 %" = estimate + z * se
+    )
+  }
+    
+    fixed_effects_rounded <- round(fixed_effects, 4)
+    confint_fixed_rounded <- round(confint_fixed, 4)
+
+    time_desc <- "Week 17 vs. Baseline"
+    
+      
+  if (ref_level == 'hmp_full'){
+    group1_term <- "sr_scr_rand_grouphmp_active"
+    group_comparison <- c("Full_vs_Active", 
+                          "Full_vs_UC")
+  } else if (ref_level == 'hmp_active'){
+    group1_term <- "sr_scr_rand_grouphmp_full"
+    group_comparison <- c("Active_vs_Full", 
+                          "Active_vs_UC")
+  }
+    
+    summary_table <- data.frame(
+        outcome = target_var,
+        comparison = rep(group_comparison, each = 1),
+        timepoint = rep(c(time_desc), 2),
+        model = model_name,
+        
+        # Coefficients
+        coef = c(
+          fixed_effects[group1_term, "Estimate"],
+          fixed_effects["sr_scr_rand_groupuc", "Estimate"]
+        ),
+        
+        # Coefficient CIs
+        coef_ci_lower = c(
+          confint_fixed[group1_term, 1],
+          confint_fixed["sr_scr_rand_groupuc", 1]
+        ),
+        coef_ci_upper = c(
+          confint_fixed[group1_term, 2],
+          confint_fixed["sr_scr_rand_groupuc", 2]
+        ),
+        
+        # P-values
+        p_value = c(
+          fixed_effects[group1_term, "Pr(>|t|)"],
+          fixed_effects["sr_scr_rand_groupuc", "Pr(>|t|)"]
+        ),
+        
+        # Effect sizes
+        d = smd_results$d,
+        d_ci_lower = smd_results$ci_lower,
+        d_ci_upper = smd_results$ci_upper,
+        
+        stringsAsFactors = FALSE
+      )
+     
+       # Round numeric columns
+    summary_table <- summary_table %>%
+      mutate(across(where(is.numeric), ~round(., 4)))
+    
+    return(list(
+      summary_table = summary_table,
+      ci_fixed = confint_fixed_rounded
+    ))
+}
+```
+
+### Function: Tobit effect size
+```{r tobit_effect_size}
+compute_effect_size_tobit <- function(fit, data, base_var, outcome_var, 
+                                       ref_level = 'hmp_full', left_val, B = 2000, seed = 20260521) {
+  
+  if (ref_level == 'hmp_full') {
+    group1_term    <- "sr_scr_rand_grouphmp_active"
+    group_comparison <- c("full_vs_active", "full_vs_uc")
+  } else if (ref_level == 'hmp_active') {
+    group1_term    <- "sr_scr_rand_grouphmp_full"
+    group_comparison <- c("active_vs_full", "active_vs_uc")
+  }
+  
+  beta_names   <- c(group1_term, "sr_scr_rand_groupuc")
+  log_sig_name <- "(Intercept):2"
+  
+  # ── Point estimates ──────────────────────────────────────────────────────────
+  cf        <- coef(fit)
+  sigma_hat <- exp(cf[log_sig_name])
+  d_hat     <- cf[beta_names] / sigma_hat
+  
+  # ── Bootstrap CIs ────────────────────────────────────────────────────────────
+  boot_one <- function(i) {
+    idx   <- sample.int(nrow(data), replace = TRUE)
+    fit_b <- tryCatch(
+      vglm(formula(fit),
+           family = tobit(Lower = left_val),
+           data   = data[idx, ]),
+      error = function(e) NULL)
+    if (is.null(fit_b)) return(rep(NA_real_, length(beta_names)))
+    
+    cf_b  <- coef(fit_b)
+    
+    if (!all(c(beta_names, log_sig_name) %in% names(cf_b))) return(rep(NA_real_, length(beta_names)))
+    
+    sig_b <- exp(cf_b[log_sig_name])
+    
+    unname(cf_b[beta_names] / sig_b)
+  }
+  
+  set.seed(seed)
+  boot_mat <- t(sapply(seq_len(B), boot_one))
+  
+  prop_failed <- mean(is.na(boot_mat[, 1]))
+  if (prop_failed > 0.05) warning(sprintf("%.1f%% of bootstrap resamples failed to converge", prop_failed * 100))
+  
+  ci_lower <- apply(boot_mat, 2, quantile, probs = 0.025, na.rm = TRUE)
+  ci_upper <- apply(boot_mat, 2, quantile, probs = 0.975, na.rm = TRUE)
+  
+  # ── Diagnostic printout ─────────────
+  cat('\nTobit SMD (sigma from model)\n')
+  cat('sigma_hat:', round(sigma_hat, 4), '\n')
+  cat(sprintf('%s  d = %.4f  95%% CI [%.4f, %.4f]\n',
+              group_comparison[1], d_hat[1], ci_lower[1], ci_upper[1]))
+  cat(sprintf('%s  d = %.4f  95%% CI [%.4f, %.4f]\n',
+              group_comparison[2], d_hat[2], ci_lower[2], ci_upper[2]))
+  cat(sprintf('Bootstrap convergence failures: %.1f%%\n', prop_failed * 100))
+  
+  # ── Return in same shape as compute_effect_size_wide ─────────────────────────
+  effect_df <- data.frame(
+    group      = group_comparison,
+    effect_type = "T1",
+    d          = unname(d_hat),
+    ci_lower   = unname(ci_lower),
+    ci_upper   = unname(ci_upper)
+  )
+  
+  return(effect_df)
+}
+```
+
+
+### Function: Tobit regression for DBS data
+```{r tobit_comparison}
+tobit_comparison_eh <- function(df_tmp, target_var, exc_outlier = FALSE, ref_level = 'hmp_full'){
+  model_list <- list()
+  df_tmp <- df_tmp %>%
+    mutate(sr_scr_rand_group = relevel(factor(sr_scr_rand_group), ref = ref_level))
+  
+  # create baseline appending dbs_base to target
+  base_var <- paste0('dbs_base_', target_var)
+  # create followup (3mo) appending dbs_3mo to target 
+  fu_var <- paste0('dbs_3mo_', target_var)
+  
+   # --- LLD / left-censoring for Tobit ---
+  left_val <- ifelse(
+    str_detect(target_var, "il6|il10"), 0.4,
+    ifelse(str_detect(target_var, "tnf"), 0.9, NA_real_))  # CRP or other uncensored
+  
+  if (exc_outlier == TRUE){
+    mean_y <- mean(df_tmp[[fu_var]], na.rm = TRUE)
+    sd_y <- sd(df_tmp[[fu_var]], na.rm = TRUE)
+    threshold_upper_y <- mean_y + 3 * sd_y
+    threshold_lower_y <- mean_y - 3 * sd_y
+    
+    mean_base <- mean(df_tmp[[base_var]], na.rm = TRUE)
+    sd_base <- sd(df_tmp[[base_var]], na.rm = TRUE)
+    threshold_upper_base <- mean_base + 3 * sd_base
+    threshold_lower_base <- mean_base - 3 * sd_base
+    
+    df_tmp <- df_tmp %>%
+      mutate(!!sym(fu_var) := ifelse(
+               !!sym(fu_var) > threshold_upper_y | !!sym(fu_var) < threshold_lower_y,
+               NA, !!sym(fu_var)),
+             !!sym(base_var) := ifelse(
+               !!sym(base_var) > threshold_upper_base | !!sym(base_var) < threshold_lower_base,
+               NA, !!sym(base_var)))
+    }
+
+
+  
+  # filters CRP>10
+  df_tmp_exc2 <- df_tmp |> 
+    filter(dbs_base_crp_plasma_mean_AB <= 10 &
+           dbs_3mo_crp_plasma_mean_AB <= 10)
+  threshold_string <- "CRP > 10 at baseline or 3mo"
+
+# residual plotting 
+plot_residuals <- function(model, df, model_name, target_var) {
+  # identify which vars the model used 
+  model_vars <- all.vars(formula(model)) 
+  
+  # find rows w complete data on those vars 
+  #used_rows <- setdiff(seq_len(nrow(df)), model@na.action) 
+  rows_used <- which(complete.cases(df[, model_vars, drop = FALSE]))
+  
+  # extract residuals aligned with rows_used 
+  res <- residuals(model, type = "response")
+  #res <- res[seq_along(used_rows)] # keep only real obsv 
+  
+  # create full-length residual vector 
+  res_full <- rep(NA_real_, nrow(df))
+  res_full[rows_used] <- res 
+
+  # build plotting df              
+  residuals_df <- data.frame(Residuals = res_full, Group = df$sr_scr_rand_group)
+  
+  # plot
+  ggplot(residuals_df, aes(x = as.factor(Group), y = Residuals, fill = as.factor(Group))) +
+    geom_violin(trim = FALSE, alpha = 0.4, color = "black") +  
+    geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +  
+    geom_jitter(width = 0.1, size = 1, alpha = 0.6, color = "black") + 
+    labs(
+      title = paste("Residuals Violin Plot:", target_var, "-", model_name), 
+      x = "Randomization Group", 
+      y = "Residuals"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+}
+
+  # Formula for ALL models: 
+  formula_full <- as.formula(paste0(fu_var, "~ sr_base_curhealth_2infection + sr_3mo_curhealth_2infection + ", base_var, " + sr_scr_rand_group"))
+  ## formula_simple is for analyses that exclude anyone with 2+ infection sx 
+  formula_simple <- as.formula(paste0(fu_var, "~", base_var, " + sr_scr_rand_group")) 
+  
+  # run tobit 
+  run_model <- function(formula, data, model_name) {
+    if(!is.na(left_val)) {
+      model <- vglm(formula, tobit(Lower = left_val), data = data)
+    } else {
+      model <- lm(formula, data = data)
+    }
+    return(model)
+  }
+  
+  cat("Running tobit regression model for:", target_var, "========================================\n")
+  # Model 1: all samples, infectious symptoms as covariate
+  cat("Model 1: Run all samples with infectious symptoms as covariate------------\n")
+  
+  print(describeBy(df_tmp %>% dplyr::select(contains(target_var)), group = df_tmp$sr_scr_rand_group, digits = 3))
+  
+  model1 <- run_model(formula_full, df_tmp, "Model 1")
+  
+  cat('\n~~~~~~~~~~~~~~~~\nModel 1: ', 'dbs_3mo_', target_var, ' ~ sr_base_curhealth_2infection + sr_3mo_curhealth_2infection + dbs_base_', target_var, ' + sr_scr_rand_group', '\n~~~~~~~~~~~~~~~~\n')
+  
+  print(summary(model1))
+  print(plot_residuals(model1, df_tmp, "Model 1", target_var))
+  
+  lm_model_1_d <- compute_effect_size_tobit(fit = model1, 
+                                            data = df_tmp %>% filter(!is.na(!!sym(base_var)) & !is.na(!!sym(fu_var))), 
+                                            base_var = base_var,
+                                            outcome_var = fu_var,
+                                            left_val = left_val,
+                                            ref_level = ref_level)
+  lm_model1_results_all <- dbs_results(est = model1,
+                                   target_var = target_var,
+                                   smd_results =lm_model_1_d,
+                                   model_name = "Original",
+                                   ref_level = ref_level)
+  lm_model1_results <- lm_model1_results_all$summary_table
+  lm_model1_ci <- lm_model1_results_all$ci_fixed
+  model_list[["Original"]] <- model1
+  
+  
+  # Model 2: excluding CRP >10, infectious symptoms as covariate 
+  cat("\nModel 2: Re-run excluding CRP > 10 with infectious symptoms as covariate------------\n")
+  print(describeBy(df_tmp_exc2 %>% 
+                     dplyr::select(contains(target_var)), group = df_tmp_exc2$sr_scr_rand_group, digits = 3))
+  
+  model2 <- run_model(formula_full, df_tmp_exc2, "Model 2") 
+  
+  cat('\n~~~~~~~~~~~~~~~~\nModel 2: ', 'dbs_3mo_', target_var, ' ~ sr_base_curhealth_2infection + sr_3mo_curhealth_2infection + dbs_base_', target_var, ' + sr_scr_rand_group', '\n~~~~~~~~~~~~~~~~\n')
+
+  print(summary(model2))
+  print(plot_residuals(model2, df_tmp, "Model 2", target_var))
+  
+    
+  lm_model_2_d <- compute_effect_size_tobit(fit = model2,
+                                            data = df_tmp_exc2 %>% filter(!is.na(!!sym(base_var)) &
+                                                                            !is.na(!!sym(fu_var))),
+                                            base_var = base_var,
+                                            outcome_var = fu_var,
+                                            left_val = left_val,
+                                            ref_level = ref_level)
+  lm_model2_results_all <- dbs_results(est = model2,
+                                   target_var = target_var,
+                                    smd_results =lm_model_2_d,
+                                    model_name = "Excluding CRP>10 with infectious symptoms as covariate",
+                                   ref_level = ref_level)
+  lm_model2_results <- lm_model2_results_all$summary_table
+  lm_model2_ci <- lm_model2_results_all$ci_fixed
+  model_list[["crp"]] <- model2
+  
+  
+  # Model 3 excludes those w 2+ infectious symptoms at baseline or 3mo 
+  cat("\nModel 3: Re-run excluding those with 2+ infectious symptoms at baseline OR 3mo------------\n")
+
+  df_tmp_exc3 <- df_tmp %>%  
+    filter(sr_3mo_curhealth_2infection ==0 & 
+             sr_base_curhealth_2infection ==0)
+  
+  print(describeBy(df_tmp_exc3 %>% dplyr::select(contains(target_var)), group = df_tmp_exc3$sr_scr_rand_group, digits = 3))
+  
+  model3 <- run_model(formula_simple, df_tmp_exc3, "Model 3")
+  
+  cat('\n~~~~~~~~~~~~~~~~\nModel 3: ', 'dbs_3mo_', target_var, ' ~ dbs_base_', target_var, ' + sr_scr_rand_group', '\n~~~~~~~~~~~~~~~~\n')
+  
+  print(summary(model3))
+  print(plot_residuals(model3, df_tmp, "Model 3", target_var))
+  
+  
+  lm_model_3_d <- compute_effect_size_tobit(fit = model3,
+                                            data = df_tmp_exc3 %>% filter(!is.na(!!sym(base_var)) &
+                                                                            !is.na(!!sym(fu_var))),
+                                            base_var = base_var,
+                                            outcome_var = fu_var,
+                                            left_val = left_val,
+                                            ref_level = ref_level)
+  
+  lm_model3_results_all <- dbs_results(est = model3,
+                                   target_var = target_var,
+                                    smd_results =lm_model_3_d,
+                                    model_name = "Excluding those with 2+ infectious symptoms at Baseline or Week 17",
+                                   ref_level = ref_level)
+  lm_model3_results <- lm_model3_results_all$summary_table
+  lm_model3_ci <- lm_model3_results_all$ci_fixed
+  model_list[["infection"]] <- model3
+  
+  
+    # Model 4 excludes those w 2+ infectious symptoms at baseline or 3mo AND any >10 CRP 
+  cat("\nModel 4: Re-run excluding CRP > 10 and those with 2+ infectious symptoms at baseline OR 3mo------------\n")
+
+  df_tmp_exc4 <- df_tmp_exc2 %>%  
+    filter(sr_3mo_curhealth_2infection == 0 & 
+             sr_base_curhealth_2infection == 0)
+  
+  print(describeBy(df_tmp_exc4 %>% dplyr::select(contains(target_var)), group = df_tmp_exc4$sr_scr_rand_group, digits = 3))
+  
+  model4 <- run_model(formula_simple, df_tmp_exc4, "Model 4")
+  
+  cat('\n~~~~~~~~~~~~~~~~\nModel 4: ', 'dbs_3mo_', target_var, ' ~ dbs_base_', target_var, ' + sr_scr_rand_group', '\n~~~~~~~~~~~~~~~~\n')
+  
+  print(summary(model4))
+  print(plot_residuals(model4, df_tmp, "Model 4", target_var))
+  
+    
+  lm_model_4_d <- compute_effect_size_tobit(fit = model4,
+                                            data = df_tmp_exc4 %>% filter(!is.na(!!sym(base_var)) &
+                                                                            !is.na(!!sym(fu_var))),
+                                            base_var = base_var,
+                                            outcome_var = fu_var,
+                                            left_val = left_val,
+                                            ref_level = ref_level)
+  
+  lm_model4_results_all <- dbs_results(est = model4,
+                                   target_var = target_var,
+                                    smd_results =lm_model_4_d,
+                                    model_name = "Excluding CRP>10 and those with 2+ infectious symptoms at Baseline or Week 17",
+                                   ref_level = ref_level)
+  lm_model4_results <- lm_model4_results_all$summary_table
+  lm_model4_ci <- lm_model4_results_all$ci_fixed
+  model_list[["crpinfection"]] <- model4
+  
+  result_summary <- rbind(
+    lm_model1_results,
+    lm_model2_results,
+    lm_model3_results,
+    lm_model4_results
+  )
+  
+  ci_fixed <- list(
+    Original = lm_model1_ci,
+    crp = lm_model2_ci,
+    infection = lm_model3_ci,
+    crpinfection = lm_model4_ci
+  )
+  
+  print(ci_fixed)
+  
+  return(list(result_summary = result_summary, 
+              ci_fixed = ci_fixed, 
+              model_list = model_list))
+}
+```
+
+### Function: Simple linear regression revised for DBS data
+```{r dbs-linear-regression}
+lm_comparison_eh <- function(df_tmp, target_var, exc_outlier = FALSE, ref_level = 'hmp_full'){
+  model_list <- list()
+  df_tmp <- df_tmp %>%
+    mutate(sr_scr_rand_group = relevel(factor(sr_scr_rand_group), ref = ref_level))
+  
+  # create baseline appending dbs_base to target
+  base_var <- paste0('dbs_base_', target_var)
+  # create followup (3mo) appending dbs_3mo to target 
+  fu_var <- paste0('dbs_3mo_', target_var)
+
+  if (exc_outlier == TRUE){
+    mean_y <- mean(df_tmp[[fu_var]], na.rm = TRUE)
+    sd_y <- sd(df_tmp[[fu_var]], na.rm = TRUE)
+    threshold_upper_y <- mean_y + 3 * sd_y
+    threshold_lower_y <- mean_y - 3 * sd_y
+    
+    mean_base <- mean(df_tmp[[base_var]], na.rm = TRUE)
+    sd_base <- sd(df_tmp[[base_var]], na.rm = TRUE)
+    threshold_upper_base <- mean_base + 3 * sd_base
+    threshold_lower_base <- mean_base - 3 * sd_base
+    
+    df_tmp <- df_tmp %>%
+      mutate(!!sym(fu_var) := ifelse(
+               !!sym(fu_var) > threshold_upper_y | !!sym(fu_var) < threshold_lower_y,
+               NA, !!sym(fu_var)),
+             !!sym(base_var) := ifelse(
+               !!sym(base_var) > threshold_upper_base | !!sym(base_var) < threshold_lower_base,
+               NA, !!sym(base_var)))
+    }
+
+
+
+  # filter based on CRP threshold
+  df_tmp_exc2 <- df_tmp |> 
+    filter(dbs_base_crp_plasma_mean_AB <= 10,
+           dbs_3mo_crp_plasma_mean_AB <= 10)
+  threshold_string <- "values > 10 at baseline or 3mo" 
+
+  plot_residuals <- function(model, data, model_name) {
+    # Extract only the rows used in the model
+    model_data <- model.frame(model)
+    
+    residuals_df <- data.frame(Residuals = residuals(model), Group = model_data$sr_scr_rand_group)
+    
+    ggplot(residuals_df, aes(x = as.factor(Group), y = Residuals, fill = as.factor(Group))) +
+      geom_violin(trim = FALSE, alpha = 0.4, color = "black") +  
+      geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.5) +  
+      geom_jitter(width = 0.1, size = 1, alpha = 0.6, color = "black") + 
+      labs(
+        title = paste("Residuals Violin Plot:", target_var, "-", model_name), 
+        x = "Randomization Group", 
+        y = "Residuals"
+      ) +
+      theme_minimal() +
+      theme(
+        legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14)
+      )
+  }
+
+
+  cat("Running linear regression model for:", target_var, "========================================\n")
+  # first run samples with infectious symptoms as covariate, ALL including outliers
+  cat("Model 1: Run all samples with infectious symptoms as covariate------------\n")
+  
+  print(describeBy(df_tmp %>% dplyr::select(contains(target_var)), 
+                   group = df_tmp$sr_scr_rand_group, digits = 3))
+  
+  lm_formula1a <- as.formula(paste0('dbs_3mo_', target_var, ' ~ sr_base_curhealth_2infection + sr_3mo_curhealth_2infection + dbs_base_', target_var, ' + sr_scr_rand_group'))
+  lm_model1a <- lm(lm_formula1a, data = df_tmp)
+  lm_model_summary1a <- summary(lm_model1a)
+  
+  cat('\n~~~~~~~~~~~~~~~~\nModel 1A: ', 'dbs_3mo_', target_var, ' ~ sr_base_curhealth_2infection + sr_3mo_curhealth_2infection + dbs_base_', target_var, ' + sr_scr_rand_group', '\n~~~~~~~~~~~~~~~~\n')
+  
+  print(lm_model_summary1a)
+  print(plot_residuals(lm_model1a, df_tmp, "Model 1A"))
+  
+  lm_model_1a_d <- compute_effect_size_wide(estimation = lm_model1a,
+                                            data = df_tmp %>% filter(!is.na(!!sym(base_var)) & !is.na(!!sym(fu_var))),
+                                            base_var = base_var,
+                                            outcome_var = fu_var,
+                                            preMI = "Y",
+                                            ref_level = ref_level)
+  lm_model1a_results_all <- dbs_results(est = lm_model1a,
+                                    target_var = target_var,
+                                    smd_results =lm_model_1a_d,
+                                    model_name = "Original",
+                                    ref_level = ref_level)
+  lm_model1a_results <- lm_model1a_results_all$summary_table
+  lm_model1a_ci <- lm_model1a_results_all$ci_fixed
+  model_list[["Original"]] <- lm_model1a
+  
+  # Model 2: excluding CRP>10, infectious symptoms as covariate 
+  cat("\nModel 2: Re-run excluding CRP>10 with infectious symptoms as covariate------------\n")
+  print(describeBy(df_tmp_exc2 %>% dplyr::select(contains(target_var)), group = df_tmp_exc2$sr_scr_rand_group, digits = 3))
+  
+  lm_model2a <- lm(lm_formula1a, data = df_tmp_exc2)
+  lm_model_summary2a <- summary(lm_model2a)
+  
+  cat('\n~~~~~~~~~~~~~~~~\nModel 2A: ', 'dbs_3mo_', target_var, ' ~ sr_base_curhealth_2infection + sr_3mo_curhealth_2infection + dbs_base_', target_var, ' + sr_scr_rand_group', '\n~~~~~~~~~~~~~~~~\n')
+
+  print(lm_model_summary2a)
+  print(plot_residuals(lm_model2a, df_tmp, "Model 2A"))
+  
+  lm_model_2a_d <- compute_effect_size_wide(estimation = lm_model2a,
+                                            data = df_tmp_exc2 %>% filter(!is.na(!!sym(base_var)) &
+                                                                            !is.na(!!sym(fu_var))),
+                                            base_var = base_var,
+                                            outcome_var = fu_var,
+                                            preMI = "Y",
+                                            ref_level = ref_level)
+  lm_model2a_results_all <- dbs_results(est = lm_model2a,
+                                    target_var = target_var,
+                                    smd_results =lm_model_2a_d,
+                                    model_name = "Excluding CRP>10 with infectious symptoms as covariate",
+                                    ref_level = ref_level)
+  lm_model2a_results <- lm_model2a_results_all$summary_table
+  lm_model2a_ci <- lm_model2a_results_all$ci_fixed
+  model_list[["crp"]] <- lm_model2a 
+  
+  # Model 3 excludes those w 2+ infectious symptoms at baseline or 3mo 
+  cat("\nModel 3: Re-run excluding those with 2+ infectious symptoms at baseline OR 3mo------------\n")
+
+  df_tmp_exc3 <- df_tmp %>%  
+    filter(sr_3mo_curhealth_2infection == 0 & 
+             sr_base_curhealth_2infection == 0)
+  
+  print(describeBy(df_tmp_exc3 %>% dplyr::select(contains(target_var)), group = df_tmp_exc3$sr_scr_rand_group, digits = 3))
+  
+  lm_formula3a <- as.formula(paste0('dbs_3mo_', target_var, ' ~ dbs_base_', target_var, ' + sr_scr_rand_group'))
+  lm_model3a <- lm(lm_formula3a, data = df_tmp_exc3)
+  lm_model_summary3a <- summary(lm_model3a)
+  
+  cat('\n~~~~~~~~~~~~~~~~\nModel 3A: ', 'dbs_3mo_', target_var, ' ~ dbs_base_', target_var, ' + sr_scr_rand_group', '\n~~~~~~~~~~~~~~~~\n')
+  
+  print(lm_model_summary3a)
+  print(plot_residuals(lm_model3a, df_tmp, "Model 3A"))
+  
+  lm_model_3a_d <- compute_effect_size_wide(estimation = lm_model3a,
+                                            data = df_tmp_exc3 %>% filter(!is.na(!!sym(base_var)) &
+                                                                            !is.na(!!sym(fu_var))),
+                                            base_var = base_var,
+                                            outcome_var = fu_var,
+                                            preMI = "Y",
+                                            ref_level = ref_level)
+  
+  lm_model3a_results_all <- dbs_results(est = lm_model3a,
+                                    target_var = target_var,
+                                    smd_results =lm_model_3a_d,
+                                    model_name = "Excluding those with 2+ infectious symptoms at Baseline or Week 17",
+                                    ref_level = ref_level)
+  lm_model3a_results <- lm_model3a_results_all$summary_table
+  lm_model3a_ci <- lm_model3a_results_all$ci_fixed
+  model_list[["infection"]] <- lm_model3a
+  
+    # Model 4 excludes CRP>10 and those w 2+ infectious symptoms at baseline or 3mo 
+  cat("\nModel 4: Re-run excluding CRP>10 and those with 2+ infectious symptoms at baseline OR 3mo------------\n")
+
+  df_tmp_exc4 <- df_tmp_exc2 %>%  
+    filter(sr_3mo_curhealth_2infection == 0 & 
+             sr_base_curhealth_2infection == 0)
+  
+  print(describeBy(df_tmp_exc4 %>% dplyr::select(contains(target_var)), 
+                   group = df_tmp_exc4$sr_scr_rand_group, digits = 3))
+  
+  lm_formula4a <- as.formula(paste0('dbs_3mo_', target_var, ' ~ dbs_base_', target_var, ' + sr_scr_rand_group'))
+  lm_model4a <- lm(lm_formula4a, data = df_tmp_exc4)
+  lm_model_summary4a <- summary(lm_model4a)
+  
+  cat('\n~~~~~~~~~~~~~~~~\nModel 4A: ', 'dbs_3mo_', target_var, ' ~ dbs_base_', target_var, ' + sr_scr_rand_group', '\n~~~~~~~~~~~~~~~~\n')
+  
+  print(lm_model_summary4a)
+  print(plot_residuals(lm_model4a, df_tmp, "Model 4A"))
+  
+  lm_model_4a_d <- compute_effect_size_wide(estimation = lm_model4a,
+                                            data = df_tmp_exc4 %>% filter(!is.na(!!sym(base_var)) &
+                                                                            !is.na(!!sym(fu_var))),
+                                            base_var = base_var,
+                                            outcome_var = fu_var,
+                                            preMI = "Y",
+                                            ref_level = ref_level)
+  
+  lm_model4a_results_all <- dbs_results(est = lm_model4a,
+                                    target_var = target_var,
+                                    smd_results =lm_model_4a_d,
+                                    model_name = "Excluding CRP>10 and those with 2+ infectious symptoms at Baseline or Week 17",
+                                    ref_level = ref_level)
+  lm_model4a_results <- lm_model4a_results_all$summary_table
+  lm_model4a_ci <- lm_model4a_results_all$ci_fixed
+  model_list[["crpinfection"]] <- lm_model4a
+  
+  result_summary <- rbind(
+    lm_model1a_results,
+    lm_model2a_results,
+    lm_model3a_results,
+    lm_model4a_results
+  )
+  
+  ci_fixed <- list(
+    Original = lm_model1a_ci,
+    crp = lm_model2a_ci,
+    infection = lm_model3a_ci,
+    crpinfection = lm_model4a_ci
+  )
+  print(ci_fixed)
+  
+  return(list(result_summary = result_summary, 
+              ci_fixed = ci_fixed, 
+              model_list = model_list))
+}
+```
+
+## Function: FDR correction
+```{r fx_fdr_correction}
+fdr_correction <- function(summary_data, group_vars = c('var_prefix', 'model_type','comparison', 'timepoint')){
+  fdr_corrected_p <- summary_data %>% 
+    mutate(var_prefix = sapply(outcome, map_prefix)) %>%
+    group_by(across(all_of(group_vars))) %>%    
+    mutate(p_value_fdr = {
+      idx <- outcome != "phq8_sum"
+      fdr_vals <- rep(NA_real_, n())
+      fdr_vals[idx] <- p.adjust(p_value[idx], method = "fdr")
+      fdr_vals[!idx] <- p_value[!idx]   # PHQ8 keeps original p
+      fdr_vals
+    }) %>%
+    ungroup()
+  return(fdr_corrected_p)
+}
+```
+
+
+# Load data
+
+## Load df
+```{r load_df}
+df <- read.csv(file = 'Z:/BeWell data/Full study/PrimaryPaper/BeWell_primaryPaper_deid.csv', na.strings = c("NaN", "", "NA")) %>%
+  rename(id = rand_id) %>% 
+  mutate(sr_scr_rand_group =  factor(sr_scr_rand_group,
+                                 levels = c('hmp_full', 'hmp_active', 'uc'))) %>% 
+  mutate(gender_combined = recode_values(gender_combined,
+                                      'Woman' ~ 0,
+                                      'Man' ~ 1,
+                                      'Other' ~ 2
+                                      ),
+         race_nhwhite = recode_values(race_nhwhite,
+                                      'No' ~ 0,
+                                      'Yes' ~ 1),
+         education_level = recode_values(education_level,
+                                         "not college graduate" ~ 0,
+                                         "college graduate" ~ 1),
+         income_level = recode_values(income_level,
+                                      "below median" ~ 0,
+                                      "above median" ~ 1)) %>% 
+  mutate(gender_combined = factor(gender_combined,
+                                  levels = 0:2,
+                                  labels = c('Woman', 
+                                             'Man',
+                                             'Other')),
+         race_nhwhite = factor(race_nhwhite,
+                               levels = 0:1,
+                               labels = c('No',
+                                          'Yes')),
+         education_level = factor(education_level,
+                                  levels = 0:1,
+                                  labels = c('not_college_graduate',
+                                             'college_graduate')),
+         income_level = factor(income_level,
+                               levels = 0:1,
+                               labels = c('below_median',
+                                          'above_median'))) %>% 
+  rename_with(
+    ~ str_replace(., 
+                  "^vlg_(.*?)_facial_(.*)$", 
+                  "vlg_\\1_vlg_\\2"),
+    .cols = matches("^vlg_.*_facial_")
+  ) %>% 
+  mutate(sr_base_medTherapy_bin = case_when(
+    rowSums(across(contains('_base_medTherapy')), na.rm = FALSE) > 0 ~ 1, 
+    rowSums(across(contains('_base_medTherapy')), na.rm = FALSE) == 0 ~ 0,
+    TRUE ~ NA),
+    sr_pw4_medTherapy_bin = case_when(
+    rowSums(across(contains('_pw4_medTherapy')), na.rm = FALSE) > 0 ~ 1, 
+    rowSums(across(contains('_pw4_medTherapy')), na.rm = FALSE) == 0 ~ 0,
+    TRUE ~ NA),
+    sr_3mo_medTherapy_bin = case_when(
+    rowSums(across(contains('_3mo_medTherapy')), na.rm = FALSE) > 0 ~ 1, 
+    rowSums(across(contains('_3mo_medTherapy')), na.rm = FALSE) == 0 ~ 0,
+    TRUE ~ NA)
+    )
+
+```
+
+Update df with infectious symptoms variables
+```{r dbs-covariates, message = FALSE}
+base_covariates <- c('sr_base_curhealth_coldflu',
+                     'sr_base_curhealth_fever',
+                     'sr_base_curhealth_nightsweat',
+                     'sr_base_curhealth_gi',
+                     'sr_base_curhealth_bloodyStool',
+                     'sr_base_curhealth_frequentPee',
+                     'sr_base_curhealth_rashy',
+                     'sr_base_curhealth_other')
+
+fu_covariates <- c('sr_3mo_curhealth_coldflu',
+                   'sr_3mo_curhealth_fever',
+                   'sr_3mo_curhealth_nightsweat',
+                   'sr_3mo_curhealth_gi',
+                   'sr_3mo_curhealth_bloodyStool',
+                   'sr_3mo_curhealth_frequentPee',
+                   'sr_3mo_curhealth_rashy',
+                   'sr_3mo_curhealth_other')
+
+df <- df |> 
+  # infection counts at baseline and 3mo: 
+  mutate(sr_base_curhealth_infectionCount = 
+           rowSums(across(all_of(base_covariates)), na.rm = TRUE),
+         sr_3mo_curhealth_infectionCount = 
+           rowSums(across(all_of(fu_covariates)), na.rm = TRUE)) |> 
+  
+  # binary vars for infection symp: 
+  mutate(sr_base_curhealth_infection = 
+           if_else(sr_base_curhealth_infectionCount >= 1, 1, 
+                   sr_base_curhealth_infectionCount),
+         sr_3mo_curhealth_infection = 
+           if_else(sr_3mo_curhealth_infectionCount >= 1, 1, 
+                   sr_3mo_curhealth_infectionCount)) |> 
+  
+  # per Thom's advice, binary var for those w 2+ baseline infec symp:
+  mutate(sr_base_curhealth_2infection = 
+           case_when(sr_base_curhealth_infectionCount >= 2 ~ 1,
+                     sr_base_curhealth_infectionCount < 2 ~ 0, 
+                     TRUE ~ sr_base_curhealth_infectionCount),
+         sr_3mo_curhealth_2infection = 
+           case_when(sr_3mo_curhealth_infectionCount >= 2 ~ 1,
+                     sr_3mo_curhealth_infectionCount < 2 ~ 0, 
+                     TRUE ~ sr_3mo_curhealth_infectionCount))
+
+```
+
+## Converting df to long format
+Creating general variable list
+
+```{r create_var_list}
+outcome_vars <- c('phq8_sum', 
+                  'gad7_total',
+                  'promisSleep_tScore',
+                  'flourishing_flourishing')
+
+dbs_vars <- c('crp_plasma_mean_AB',
+              'cyto_il6_dbs_mean_AB')
+
+mib_vars <- c('shannon_genus_estimate',
+              'Enterobacteriaceae_clr',
+              'Desulfovibrio_clr',
+              'Faecalibacterium_clr',
+              'Clostridium_IV_clr')
+
+mst_vars <- c('mst_LDI',
+             'mst_correctedRecognition')
+
+vlg_vars <- c('linguistic_negative_sentiment',
+              'linguistic_i')
+
+beh_vars <- c(mst_vars, 
+              vlg_vars)
+
+
+piecewise_vars <- c(outcome_vars,
+                    vlg_vars)
+```
+
+Creating baseline variable list
+
+```{r create_base_var_list}
+sr_base_vars <- character()
+sr_pw1_vars <- character()
+sr_pw2_vars <- character()
+sr_pw3_vars <- character()
+sr_post_vars <- character()
+sr_3mo_vars <- character()
+for (i in seq_along(outcome_vars)) {
+  sr_base_vars[i] <- paste0('sr_base_', outcome_vars[i])
+  sr_pw1_vars[i] <- paste0('sr_pw1_', outcome_vars[i])
+  sr_pw2_vars[i] <- paste0('sr_pw2_', outcome_vars[i])
+  sr_pw3_vars[i] <- paste0('sr_pw3_', outcome_vars[i])
+  sr_post_vars[i] <- paste0('sr_pw4_', outcome_vars[i])
+  sr_3mo_vars[i] <- paste0('sr_3mo_', outcome_vars[i])
+}
+sr_all <- c(sr_base_vars, sr_pw1_vars, sr_pw2_vars, sr_pw3_vars, sr_post_vars, sr_3mo_vars)
+
+dbs_base_vars <- character()
+dbs_3mo_vars <- character()
+for (i in seq_along(dbs_vars)) {
+  dbs_base_vars[i] <- paste0('dbs_base_', dbs_vars[i])
+  dbs_3mo_vars[i] <- paste0('dbs_3mo_', dbs_vars[i])
+}
+dbs_all <- c(dbs_base_vars, dbs_3mo_vars)
+
+mib_base_vars <- character()
+mib_3mo_vars <- character()
+for (i in seq_along(mib_vars)) {
+  mib_base_vars[i] <- paste0('mib_base_', mib_vars[i])
+  mib_3mo_vars[i] <- paste0('mib_3mo_', mib_vars[i])
+}
+mib_all <- c(mib_base_vars, mib_3mo_vars)
+
+vlg_base_vars <- character()
+vlg_pw1_vars <- character()
+vlg_pw2_vars <- character()
+vlg_pw3_vars <- character()
+vlg_post_vars <- character()
+vlg_3mo_vars <- character()
+for (i in seq_along(vlg_vars)) {
+  vlg_base_vars[i] <- paste0('vlg_base_', vlg_vars[i])
+  vlg_pw1_vars[i] <- paste0('vlg_pw1_', vlg_vars[i])
+  vlg_pw2_vars[i] <- paste0('vlg_pw2_', vlg_vars[i])
+  vlg_pw3_vars[i] <- paste0('vlg_pw3_', vlg_vars[i])
+  vlg_post_vars[i] <- paste0('vlg_pw4_', vlg_vars[i])
+  vlg_3mo_vars[i] <- paste0('vlg_3mo_', vlg_vars[i])
+}
+vlg_all <- c(vlg_base_vars, vlg_pw1_vars, vlg_pw2_vars, vlg_pw3_vars, vlg_post_vars, vlg_3mo_vars)
+
+mst_base_vars <- character()
+mst_post_vars <- character()
+mst_3mo_vars <- character()
+for (i in seq_along(mst_vars)) {
+  mst_base_vars[i] <- paste0('beh_base_', mst_vars[i])
+  mst_post_vars[i] <- paste0('beh_pw4_', mst_vars[i])
+  mst_3mo_vars[i] <- paste0('beh_3mo_', mst_vars[i])
+}
+mst_all <- c(mst_base_vars, mst_post_vars, mst_3mo_vars)
+
+```
+
+Generating df_long
+
+```{r long_to_wide}
+
+df_long_keep_hmp_vars <- as.character(df %>% 
+                                     dplyr::select(((starts_with('hmp_intervention') |
+                                                       starts_with('hmp_followup')) &
+                                                      -ends_with('_time'))) %>% 
+                                     names())
+
+df_long_keep_vars <- c('sr_scr_rand_group',
+                       'sr_scr_scr_age',
+                       'gender_combined',
+                       'race_nhwhite',
+                       'education_level',
+                       'income_level',
+                       df_long_keep_hmp_vars,
+                       'sr_scr_phq9_sum')
+
+
+df_long <- convert_long_format(df_tmp = df, 
+                               target_var_strings = piecewise_vars,
+                               constant_vars = df_long_keep_vars)
+
+```
+
+# Tables
+## Demographics
+```{r demographics}
+df_dem <- df %>%
+  dplyr::select(sr_scr_scr_age,
+                gender_combined,
+                race,
+                dem_base_dem_ethnicity,
+                race_nhwhite,
+                education_level,
+                income_level,
+                sr_scr_rand_group,
+                sr_scr_phq9_sum,
+                sr_scr_scidPast_majorDepEpisode,
+                contains('majDepEpisode'),
+                ends_with('_depDisorder'),
+                sr_base_medTherapy_bin) %>%
+  mutate(across((where(is.factor) | where(is.character) | sr_base_medTherapy_bin), ~ifelse(is.na(.), "Not Reported", as.character(.)))) %>% 
+  mutate(sr_scr_rand_group = factor(sr_scr_rand_group,
+                                    levels = c('hmp_full',
+                                               'hmp_active',
+                                               'uc'),
+                                    labels = c('HMP-full',
+                                               'HMP-Psychoed',
+                                               'Usual Care')),
+         gender_combined = factor(gender_combined,
+                                  levels = c('Man',
+                                             'Woman',
+                                             'Other',
+                                             'Not Reported')),
+         race = factor(race,
+                       levels = c('White',
+                                 'Black',
+                                 'Native',
+                                 'Asian',
+                                 'Hawaiian',
+                                 'more_than_one',
+                                 'Not Reported'),
+                       labels = c('White',
+                                  'Black or African American',
+                                  'American Indian or Alaska Native',
+                                  'Asian or Asian American',
+                                  'Native Hawaiian or Other Pacific Islander',
+                                  'Multi-racial',
+                                 'Not Reported')),
+         dem_base_dem_ethnicity = factor(dem_base_dem_ethnicity,
+                                         levels = c('yes','no','info_not_provided',
+                                 'Not Reported'),
+                                         labels = c('Yes',
+                                                    'No',
+                                                    'Did not wish to provide this information',
+                                 'Not Reported')),
+         race_nhwhite = factor(race_nhwhite,
+                               levels = c('Yes',
+                                          'No',
+                                          'Not Reported')),
+         education_level = factor(education_level,
+                                  levels = c('not_college_graduate',
+                                             'college_graduate',
+                                 'Not Reported'),
+                                  labels = c('Not college graduate',
+                                             'College Graduate',
+                                 'Not Reported')),
+         income_level = factor(income_level,
+                               levels = c('below_median',
+                                          'above_median',
+                                 'Not Reported'),
+                               labels = c('Below Median',
+                                          'Above Median',
+                                 'Not Reported')),
+         sr_scr_scidPast_majorDepEpisode = factor(sr_scr_scidPast_majorDepEpisode,
+                                                  levels = 0:1,
+                                                  labels = c('No', 'Yes')),
+         sr_scr_scidCurrent_majDepEpisode = factor(sr_scr_scidCurrent_majDepEpisode,
+                                                  levels = 0:1,
+                                                  labels = c('No', 'Yes')),
+         scid_lifetime_majDepEpisode = factor(scid_lifetime_majDepEpisode,
+                                                levels = 0:1,
+                                                labels = c('No', 'Yes')),
+         scid_current_depDisorder = factor(scid_current_depDisorder,
+                                          levels = 0:1,
+                                          labels = c('No', 'Yes')),
+         scid_past_depDisorder = factor(scid_past_depDisorder,
+                                        levels = 0:1,
+                                        labels = c('No', 'Yes')),
+         scid_lifetime_depDisorder = factor(scid_lifetime_depDisorder,
+                                            levels = 0:1,
+                                            labels = c('No', 'Yes')),
+         sr_base_medTherapy_bin = factor(sr_base_medTherapy_bin,
+                                          levels = c(1, 0, 'Not Reported'),
+                                          labels = c('Yes', 'No', 'Not Reported'))) %>% 
+  rename('Age' = sr_scr_scr_age,
+         'Gender' = gender_combined,
+         'Race' = race,
+         'Hispanic' = dem_base_dem_ethnicity,
+         'Non-Hispanic White' = race_nhwhite,
+         'Education' = education_level,
+         'Income' = income_level,
+         'PHQ-9 at screening' = sr_scr_phq9_sum, 
+         'Past Major Depressive Episode' = sr_scr_scidPast_majorDepEpisode,
+         'Current Major Depressive Episode' = sr_scr_scidCurrent_majDepEpisode,
+         'Lifetime Major Depressive Episode' = scid_lifetime_majDepEpisode,
+         'Past Depressive Disorder' = scid_past_depDisorder,
+         'Current Depressive Disorder' = scid_current_depDisorder,
+         'Lifetime Depressive Disorder' = scid_lifetime_depDisorder,
+         'Any recent mental health treatment (therapy or medication use) at Baseline' = sr_base_medTherapy_bin)
+
+df_dem %>% 
+  tbl_summary(
+    by = sr_scr_rand_group,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    digits = list(
+      all_continuous() ~ 2,
+      all_categorical() ~ c(0, 1)
+    ),
+    percent = "column",
+    missing = "ifany",
+  ) %>%
+  add_overall() %>%
+  bold_labels() %>%
+  italicize_levels()
+```
+
+## Descriptive statistics of outcomes by group
+```{r all_vars_desc}
+title_order <- names(target_titles)
+time_order <- c("Baseline", "Week 1", "Week 2", "Week 3", "Week 4", "Week 17")
+
+desc_table_medTherapy <- df %>%
+  dplyr::select(contains("medTherapy")) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
+  group_by(variable) %>%
+  summarize(
+    n = sum(!is.na(value)),
+    mean = sum(value, na.rm = TRUE), # total count of ppts with that medication/therapy, naming as mean for merging purpose
+    sd = sprintf("%.1f%%", mean / n * 100) # percentage of ppts with that medication/therapy, naming as sd for merging purpose
+  ) %>% 
+  mutate(mean = sprintf("%.0f", mean)) %>% 
+  rename(Variable = variable)
+  
+
+desc_table <- df %>% 
+  mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_base_cyto_il6_dbs_mean_AB),
+         dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
+  dplyr::select(all_of(c(sr_all,
+                         dbs_all,
+                         mib_all,
+                         vlg_all,
+                         mst_all))) %>% 
+  psych::describe() %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("Variable") %>%
+  dplyr::select(Variable, n, mean, sd # , 
+                # skew, kurtosis
+                ) %>%
+  mutate(mean = as.character(sprintf("%.2f", mean)),
+         sd = as.character(sprintf("%.2f", sd))) %>% 
+  full_join(desc_table_medTherapy) %>% 
+  mutate(n = as.integer(n)) %>%
+  mutate(
+    Title = sapply(Variable, map_title, title_map = target_titles),
+    Time = case_when(
+      str_detect(Variable, '_base_') ~ 'Baseline',
+      str_detect(Variable, '_pw1_') ~ 'Week 1',
+      str_detect(Variable, '_pw2_') ~ 'Week 2',
+      str_detect(Variable, '_pw3_') ~ 'Week 3',
+      str_detect(Variable, '_pw4_') ~ 'Week 4',
+      str_detect(Variable, '_3mo_') ~ 'Week 17'
+    ),
+    Measure = paste0(Time, ' ', Title)
+  ) %>% 
+  mutate(
+    Title_order = factor(Title, levels = target_titles),
+    Time_order = factor(Time, levels = time_order)
+  ) %>%
+  arrange(Title_order, Time_order) %>%
+  dplyr::select(Title, Time, n, mean, sd
+                ) %>% 
+  rename('Mean/Count' = mean,
+         'SD/%' = sd)
+
+# By group
+group_lvs <- as.character(levels(df$sr_scr_rand_group))
+desc_table_grouped <- desc_table
+
+for (group_lv in group_lvs) {
+  desc_table_medTherapy_tmp <- df %>%
+    filter(sr_scr_rand_group == group_lv) %>%
+    dplyr::select(contains("medTherapy")) %>%
+    pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
+    group_by(variable) %>%
+    summarize(
+      n = sum(!is.na(value)),
+      mean = sum(value, na.rm = TRUE), # total count of ppts with that medication/therapy, naming as mean for merging purpose
+      sd = sprintf("%.1f%%", mean / n * 100) # percentage of ppts with that medication/therapy, naming as sd for merging purpose
+    ) %>% 
+    mutate(mean = sprintf("%.0f", mean)) %>% 
+    rename(Variable = variable)
+  
+  desc_table_tmp <- df %>%
+    mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_base_cyto_il6_dbs_mean_AB),
+           dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
+    filter(sr_scr_rand_group == group_lv) %>%
+    dplyr::select(all_of(c(sr_all,
+                           dbs_all,
+                           mib_all,
+                           vlg_all,
+                           mst_all))) %>%
+    psych::describe() %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column("Variable") %>%
+    dplyr::select(Variable, n, mean, sd 
+                  ) %>%
+    mutate(mean = as.character(sprintf("%.2f", mean)),
+           sd = as.character(sprintf("%.2f", sd))) %>% 
+    full_join(desc_table_medTherapy_tmp) %>% 
+    mutate(n = as.integer(n)) %>%
+    mutate(
+      Title = sapply(Variable, map_title, title_map = target_titles),
+      Time = case_when(
+        str_detect(Variable, '_base_') ~ 'Baseline',
+        str_detect(Variable, '_pw1_') ~ 'Week 1',
+        str_detect(Variable, '_pw2_') ~ 'Week 2',
+        str_detect(Variable, '_pw3_') ~ 'Week 3',
+        str_detect(Variable, '_pw4_') ~ 'Week 4',
+        str_detect(Variable, '_3mo_') ~ 'Week 17'
+      ),
+      Measure = paste0(Time, ' ', Title)
+    ) %>%
+    mutate(
+      Title_order = factor(Title, levels = target_titles),
+      Time_order = factor(Time, levels = time_order)
+      ) %>%
+    arrange(Title_order, Time_order) %>% 
+    dplyr::select(Title, Time, n, mean, sd
+                  ) %>%
+  rename('Mean' = mean,
+         'SD' = sd) %>% 
+    rename_with(~paste0(., "_", group_lv), -c(Title, Time))
+  
+  desc_table_grouped <- left_join(desc_table_grouped, desc_table_tmp)
+}
+
+# Build gt table
+gt_table <- desc_table_grouped %>%
+  gt(groupname_col = "Title") %>% 
+  cols_label(Time = "Outcome/Time point") %>% 
+  fmt_number(columns = matches("(^|_)n(_|$)"), decimals = 0) %>%
+  fmt_number(columns = where(is.numeric) & !matches("(^|_)n(_|$)"), decimals = 2) %>%
+  tab_spanner(
+    label = "All Participants",
+    columns = c(n, 'Mean/Count', 'SD/%'
+                )
+  )
+
+# Add a spanner for each group and relabel columns
+for (group_lv in group_lvs) {
+  # Create named list for cols_label
+  label_list <- setNames(
+    list("n", 'Mean/Count', 'SD/%'
+         ),
+    c(paste0("n_", group_lv),
+      paste0("Mean_", group_lv),
+      paste0("SD_", group_lv)
+      )
+  )
+  
+  if (group_lv == 'hmp_full'){
+    lv_name <- 'HMP-Full'
+    } else if (group_lv == "hmp_active"){
+      lv_name <- 'HMP-Psychoed'
+    } else if (group_lv == "uc"){
+      lv_name <- 'Usual Care'
+      }
+  
+  gt_table <- gt_table %>%
+    tab_spanner(
+      label = paste(lv_name),
+      id = paste0("spanner_", group_lv),
+      columns = c(
+        paste0("n_", group_lv),
+        paste0("Mean_", group_lv),
+        paste0("SD_", group_lv)
+      )
+    ) %>%
+    cols_label(.list = label_list)
+}
+
+gt_table <- gt_table %>%
+    cols_align(
+          align = "center",
+          columns = -2
+          )
+gt_table
+```
+
+
+# Multiple imputation for long format data
+
+```{r mi_df}
+df_pre_mi <- df %>% dplyr::select(id,
+                                  sr_scr_rand_group,
+                                  sr_scr_scr_age, 
+                                  gender_combined, 
+                                  race_nhwhite, 
+                                  education_level, 
+                                  income_level, 
+                                  all_of(c(sr_all,
+                                           vlg_all
+                                           )))
+
+var_list <- df_pre_mi %>% 
+  dplyr::select(-id,
+                -sr_scr_rand_group,
+                -sr_scr_scr_age, 
+                -gender_combined, 
+                -race_nhwhite, 
+                -education_level, 
+                -income_level) %>% 
+  names()
+```
+
+Check for missingness: over 10% for all outcome variables, except at baseline.
+
+```{r missing_check}
+df_pre_mi %>% summarise(across(everything(), ~ sum(is.na(.))))
+
+for (outcome in outcome_vars){
+  df_tmp <- df_pre_mi %>% dplyr::select(ends_with(outcome))
+  print(outcome)
+  print(md.pattern(df_tmp))
+  print(names(df_tmp))
+  rm(df_tmp, outcome)
+}
+```
+
+convert into long format
+
+```{r mi}
+df_mi_long_keep_vars <- c('sr_scr_rand_group',
+                          'sr_scr_scr_age',
+                          'gender_combined',
+                          'race_nhwhite',
+                          'income_level',
+                          'education_level')
+
+all_imp_vars <- c('sr_scr_scr_age',
+                  'gender_combined',
+                  'race_nhwhite',
+                  'income_level',
+                  'education_level',
+                  piecewise_vars)
+
+df_pre_mi_long <- convert_long_format(df_tmp = df_pre_mi, 
+                                      target_var_strings = piecewise_vars, 
+                                      constant_vars = df_mi_long_keep_vars)
+
+df_pre_mi_long <- df_pre_mi_long %>% 
+  mutate(across(all_of(all_imp_vars), ~ ifelse(is.na(.), 1, 0), .names = "missing_{.col}"))
+```
+
+
+# Actual Imputation
+
+With range restriction
+
+```{r impute}
+value_range <- list("phq8_sum" = c(0, 27), 
+                    "gad7_total" = c(0, 21),
+                    "flourishing_flourishing" = c(0, 10),
+                    "promisSleep_tScore" = c(0, 77.6),
+                    "linguistic_negative_sentiment" = c(0, 100),
+                    "linguistic_i" = c(0, 100)
+                    )
+
+df_mi_restricted <- imputating_missing_long(df_tmp = df_pre_mi_long, 
+                                            vars = all_imp_vars, 
+                                            restrict_range = "Y",
+                                            range_matrix = value_range)
+```
+
+
+
+Save the completed imputed data
+
+```{r save_imputed}
+df_og_imp <- complete(df_mi_restricted, action = "long", include = TRUE)# with original data
+df_imp <- complete(df_mi_restricted, action = "long", include = FALSE) # without original data
+## Check number of missing values
+table(is.na(df_og_imp))
+table(is.na(df_imp)) # all should be FALSE
+```
+
+
+## Piecewise models and MNAR sensitivity analysis
+Reference group = HMP-Full
+
+Step 1: Scale the imputed values (80% and 90% / 110% and 120%) using scale_imputed_values function.
+Step 2: Run the regression analysis with the original data, the imputed and scaled values. 
+Step 3: Run FDR-correction
+
+```{r piecewise_imputed_scaled}
+df_og_imp_scaled <- df_og_imp
+piecewise_results <- list()
+piecewise_summaries <- list()
+
+for (piecewise_var in piecewise_vars){
+  #Step 1
+  df_og_imp_scaled <- scale_imputed_values_long(df_og_imp_scaled, piecewise_var)
+  
+  #Step 2
+  piecewise_results[[piecewise_var]] <- run_sensitivity_imputed_long(df_og_imp_scaled, 
+                                                                     piecewise_var, 
+                                                                     return_table = TRUE)
+  piecewise_summary <- piecewise_results[[piecewise_var]]$summary_table
+  piecewise_summaries <- dplyr::bind_rows(piecewise_summaries, piecewise_summary)
+}
+
+print(piecewise_summaries)
+
+#Step 3
+piecewise_fdr_corrected <- fdr_correction(summary_data = piecewise_summaries, 
+                                          group_vars = c('var_prefix', 
+                                                         'model_type',
+                                                         'comparison', 
+                                                         'timepoint'))
+View(piecewise_fdr_corrected)
+```
+
+# Imputed data for MST
+```{r mst_mi}
+df_mi_keep_vars <- c('sr_scr_rand_group',
+                          'sr_scr_scr_age',
+                          'gender_combined',
+                          'race_nhwhite',
+                          'income_level',
+                          'education_level')
+
+basic_imp_vars <- c('sr_scr_scr_age',
+                  'gender_combined',
+                  'race_nhwhite',
+                  'income_level',
+                  'education_level')
+
+df_pre_mi_mst <- df %>%
+  dplyr::select(id, all_of(c(df_mi_keep_vars, mst_all))) %>%
+  mutate(across(all_of(c(basic_imp_vars, mst_all)), ~ ifelse(is.na(.), 1, 0), .names = "missing_{.col}"))
+
+df_pre_mi_mst %>% # missingness >20% at post-test and 3mo
+  dplyr::select(starts_with('missing')) %>% 
+  dfSummary(round.digits = 3)
+
+df_mi_mst <-imputating_missing_wide(df_tmp = df_pre_mi_mst,
+                                    vars = c(basic_imp_vars, mst_all),
+                                    restrict_range = "N")
+
+df_og_imp_mst <- complete(df_mi_mst, action = "long", include = TRUE)# with original data
+df_imp_mst <- complete(df_mi_mst, action = "long", include = FALSE) # without original data
+table(is.na(df_og_imp_mst))
+table(is.na(df_imp_mst)) # all should be FALSE
+```
+
+## Simple linear regression and MNAR sensitivity analysis for MST
+Reference group = HMP-Full
+
+Step 1: Scale the imputed values (80% and 90% / 110% and 120%) using scale_imputed_values function.
+Step 2: Run the regression analysis with the original data, the imputed and scaled values. 
+
+MST - Use the results from the imputed model due to high level of missingness
+```{r mst_imputed_scaled}
+df_og_imp_mst_scaled <- df_og_imp_mst
+mst_results <- list()
+mst_summaries <- list()
+
+
+for (mst_var in mst_vars){
+  #step 1
+  df_og_imp_mst_scaled <- scale_imputed_values_wide(df_og_imp_mst_scaled,
+                                                    mst_var)
+  
+  # Step 2
+  mst_results[[mst_var]] <- run_sensitivity_imputed_wide(df, 
+                                                df_og_imp_mst_scaled, 
+                                                mst_var,
+                                                return_table = TRUE)
+  
+  mst_summary <- mst_results[[mst_var]]$summary_table
+  mst_summaries <- dplyr::bind_rows(mst_summaries, mst_summary)
+}
+
+print(mst_summaries)
+
+mst_fdr_corrected <- fdr_correction(summary_data = mst_summaries, 
+                                    group_vars = c('var_prefix', 
+                                                   'model_type',
+                                                   'comparison', 
+                                                   'timepoint'))
+View(mst_fdr_corrected)
+```
+
+# DBS analysis
+### Simple linear regression and sensitivity analysis for C-Reactive Protein
+```{r crp_lm}
+crp_models <- lm_comparison_eh(df, "crp_plasma_mean_AB")
+
+crp_summary <- crp_models$result_summary %>% 
+  filter(model == 'Original')
+
+
+```
+
+### Tobit regression and sensitivity analysis for IL-6
+```{r il6_tobit}
+tobit_models <- tobit_comparison_eh(df %>% 
+                      filter(!id %in% c('R134635', 'R352787', 'R456606')), # exclude likely technical errors for IL6
+                    "cyto_il6_dbs_mean_AB")
+
+tobit_summary <- tobit_models$result_summary %>% 
+  filter(model == 'Original')
+```
+
+### FDR-correction for DBS results
+```{r dbs_fdr_correct}
+
+dbs_summaries <- dplyr::bind_rows(crp_summary, tobit_summary)
+
+dbs_fdr_corrected <- fdr_correction(dbs_summaries,
+                                    group_vars = c('var_prefix',
+                                                   'comparison',
+                                                   'timepoint'))
+print(dbs_fdr_corrected)
+```
+
+
+# Simple linear regression and sensitivity analysis for microbiome
+```{r table_dbs_sens_summary}
+df <- df %>% 
+  mutate(sr_base_healthHx_antibiotics_bin = case_when(sr_base_healthHx_antibiotics == 'yes' ~ 1,
+                                                      sr_base_healthHx_antibiotics == 'no' ~ 0,
+                                                      TRUE ~ NA))
+mib_models <- list()
+mib_summaries <- list()
+
+for (mib_var in mib_vars){
+  cat('\n\n===Original model===\n\n')
+  mib_models[[mib_var]] <- run_lm_og_wide(outcome = mib_var, return_table = TRUE)
+  mib_summary <- mib_models[[mib_var]]$results_summary
+  mib_summaries <- dplyr::bind_rows(mib_summaries, mib_summary)
+  
+  cat('\n\n===Excluding outliers > median + 1.5xIQR===\n\n')
+  run_lm_og_wide(outcome = mib_var,
+                 exc_outlier = TRUE)
+  
+  cat('\n\n===Excluding those taking antidepressant medications at baseline===\n\n')
+  run_lm_og_wide(df %>% 
+                   filter(sr_base_medTherapy_medAntiDep != 1), # update file to the new filtered file
+                 outcome = mib_var,
+                 exc_outlier = TRUE)
+  
+  cat('\n\n===Excluding those taking antibiotics in the past year===\n\n')
+  run_lm_og_wide(df %>% 
+                   filter(sr_base_healthHx_antibiotics_bin != 1), # update file to the new filtered file
+                 outcome = mib_var,
+                 exc_outlier = TRUE)
+}
+
+# FDR-Correction
+mib_fdr_corrected <- fdr_correction(mib_summaries,
+                                    group_vars = c('var_prefix',
+                                                   'comparison',
+                                                   'timepoint'))
+print(mib_fdr_corrected)
+```
+
+# Excluding outliers (mean +/- >3SDs)
+## Piecewise model results excluding outliers (mean +/- >3SDs)
+```{r exc_3sds}
+exc_3sds_models <- list()
+exc_3sds_summaries <- list()
+
+# self-report and vlog
+for (piecewise_var in piecewise_vars){
+  exc_3sds_models[[piecewise_var]] <- run_piecewise_og_long(outcome = piecewise_var,
+                                                           exc_outlier = TRUE,
+                                                           return_table = TRUE)
+  
+  exc_3sds_summary <- exc_3sds_models[[piecewise_var]]$results_summary
+  exc_3sds_summaries <- dplyr::bind_rows(exc_3sds_summaries, exc_3sds_summary)
+}
+
+# MST
+for (mst_var in mst_vars){
+  exc_3sds_models[[mst_var]] <- run_sensitivity_imputed_wide(df,
+                                                             df_og_imp_mst_scaled,
+                                                             mst_var,
+                                                             exc_outlier = TRUE,
+                                                             return_table = TRUE)
+  
+  
+  exc_3sds_summary <- exc_3sds_models[[mst_var]]$summary_table
+  exc_3sds_summary <- exc_3sds_summary %>% 
+    filter(model_type == "Imputed")
+  
+  exc_3sds_summaries <- dplyr::bind_rows(exc_3sds_summaries, exc_3sds_summary)
+}
+
+# CRP
+crp_exc_3sds_models <- lm_comparison_eh(df, 
+                                        "crp_plasma_mean_AB",
+                                        exc_outlier = TRUE)
+exc_3sds_summary <- crp_exc_3sds_models$result_summary %>% 
+  filter(model == 'Original')
+exc_3sds_summaries <- dplyr::bind_rows(exc_3sds_summaries, exc_3sds_summary)
+
+# IL-6
+tobit_exc_3sds_models <- tobit_comparison_eh(df %>% 
+                                               filter(!id %in% c('R134635', 'R352787', 'R456606')), # exclude likely technical errors for IL6
+                                             "cyto_il6_dbs_mean_AB",
+                                             exc_outlier = TRUE)
+exc_3sds_summary <- tobit_exc_3sds_models$result_summary %>% 
+  filter(model == 'Original')
+exc_3sds_summaries <- dplyr::bind_rows(exc_3sds_summaries, exc_3sds_summary)
+
+# FDR-Correction----------------------------------------------------------------
+exc_3sds_fdr_corrected <- fdr_correction(exc_3sds_summaries,
+                                         group_vars = c('var_prefix',
+                                                        'comparison',
+                                                        'timepoint'))
+print(n=100, exc_3sds_fdr_corrected)
+```
+
+# Changing ref group to HMP-Psychoed
+
+### Piecewise model results (ref group = HMP-Psychoed)
+```{r piecewise_hmp_active_as_ref}
+ac_models <- list()
+ac_summaries <- list()
+
+# self-report and vlog
+for (piecewise_var in piecewise_vars){
+  ac_models[[piecewise_var]] <- run_piecewise_og_long(outcome = piecewise_var, 
+                                                      ref_level = 'hmp_active',
+                                                      return_table = TRUE)
+  
+  ac_summary <- ac_models[[piecewise_var]]$results_summary
+  ac_summaries <- dplyr::bind_rows(ac_summaries, ac_summary)
+}
+
+# MST
+for (mst_var in mst_vars){
+  ac_models[[mst_var]] <- run_sensitivity_imputed_wide(df, 
+                                                       df_og_imp_mst_scaled,
+                                                       mst_var, 
+                                                       ref_level = 'hmp_active',
+                                                       return_table = TRUE)
+  
+  ac_summary <- ac_models[[mst_var]]$summary_table
+  ac_summary <- ac_summary %>% 
+    filter(model_type == "Imputed")
+  
+  ac_summaries <- dplyr::bind_rows(ac_summaries, ac_summary)
+}
+
+# CRP
+crp_ac_models <- lm_comparison_eh(df, 
+                                  "crp_plasma_mean_AB", 
+                                  ref_level = 'hmp_active')
+ac_summary <- crp_ac_models$result_summary %>% 
+  filter(model == 'Original')
+ac_summaries <- dplyr::bind_rows(ac_summaries, ac_summary)
+
+# IL-6
+tobit_ac_models <- tobit_comparison_eh(df %>% 
+                                         filter(!id %in% c('R134635', 'R352787', 'R456606')), # exclude likely technical errors for IL6
+                                       "cyto_il6_dbs_mean_AB", 
+                                       ref_level = 'hmp_active')
+ac_summary <- tobit_ac_models$result_summary %>% 
+  filter(model == 'Original')
+ac_summaries <- dplyr::bind_rows(ac_summaries, ac_summary)
+
+# Microbiome
+for (mib_var in mib_vars){
+  ac_models[[mib_var]] <- run_lm_og_wide(outcome = mib_var,
+                                         ref_level = 'hmp_active',
+                                         return_table = TRUE)
+  
+  ac_summary <- ac_models[[mib_var]]$results_summary
+  ac_summaries <- dplyr::bind_rows(ac_summaries, ac_summary)
+}
+
+# FDR-Correction-----------------------------------------------------------
+ac_fdr_corrected <- fdr_correction(ac_summaries,
+                                         group_vars = c('var_prefix',
+                                                        'comparison',
+                                                        'timepoint'))
+print(n = 100, ac_fdr_corrected)
+```
+
+
+# Piecewise models with PHQ9 at screening as moderator
+```{r scr_phq9_moderation}
+df_long <- df_long %>% 
+  mutate(scr_phq9_group = case_when(sr_scr_phq9_sum < 10 ~ 0,
+                                    sr_scr_phq9_sum >= 10 ~ 1,
+                                    TRUE ~NA),
+         scr_phq9_group = factor(scr_phq9_group,
+                                 levels = 0:1,
+                                 labels = c("Low PHQ-9 at screening",
+                                            "High PHQ-9 at screening")))
+
+##===PHQ-9 at screening as moderator===
+run_piecewise_og_long_moderation(
+        outcome = 'phq8_sum',
+        og_df_long = df_long,
+        moderator_var = "sr_scr_phq9_sum"
+      )
+
+##===Low PHQ-9 at screening===
+run_piecewise_og_long(
+        outcome = 'phq8_sum',
+        og_df_long = df_long %>% 
+          filter(scr_phq9_group == "Low PHQ-9 at screening")
+      )
+
+
+##===High PHQ-9 at screening===
+run_piecewise_og_long(
+        outcome = 'phq8_sum',
+        og_df_long = df_long %>% 
+          filter(scr_phq9_group == "High PHQ-9 at screening")
+      )
+
+```
+
+
+# HMP usage
+```{r hmp_usage}
+# Usage by group
+summary(lm(hmp_intervention_sum_days ~ group, data = df))
+confint(lm(hmp_intervention_sum_days ~ group, data = df))
+summary(lm(scale(hmp_intervention_sum_days) ~ group, data = df))
+confint(lm(scale(hmp_intervention_sum_days) ~ group, data = df))
+
+summary(lm(hmp_followup_sum_days ~ group, data = df))
+confint(lm(hmp_followup_sum_days ~ group, data = df))
+summary(lm(scale(hmp_followup_sum_days) ~ group, data = df))
+confint(lm(scale(hmp_followup_sum_days) ~ group, data = df))
+
+# Usage x time X group interaction
+hmp_2way <- lmer(phq8_sum ~ time1*sr_scr_rand_group + time1*hmp_intervention_sum_days + time2*sr_scr_rand_group + time2*hmp_followup_sum_days + (time1|id), data = df_long)
+summary(hmp_2way)
+confint(hmp_2way)
+
+hmp_3way <- lmer(phq8_sum ~ time1*sr_scr_rand_group*hmp_intervention_sum_days + time2*sr_scr_rand_group*hmp_followup_sum_days + (time1|id), data = df_long)
+summary(hmp_3way)
+confint(hmp_3way)
+```
+

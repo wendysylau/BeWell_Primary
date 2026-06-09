@@ -1,0 +1,512 @@
+---
+title: "Microbiome: Antidepressant Heatmap figure"
+output: html_document
+
+
+---
+
+```{r}
+suppressPackageStartupMessages({
+library(phyloseq)
+library(tidyverse)
+library(vegan)
+library(microbiome)
+library(MicrobiomeStat)
+library(pheatmap) 
+library(stringr)
+library(purrr)
+})
+```
+
+```{r}
+antibiotics.1 <- antibiotics |> 
+  select(id,sr_base_healthHx_antibiotics,
+         sr_base_healthHx_antibiotics2y18y,
+         sr_base_healthHx_antibioticsPre2yrs, sr_base_medTherapy_medAntiDep) |> 
+  rename( ppt_id= id)
+```
+
+```{r}
+new_sample_df <- sample_data(ps.27may) |> 
+  data.frame() |> 
+  dplyr::left_join(antibiotics.1, by = "ppt_id") |> 
+  mutate(BW_ID_dup = BW_ID) |> 
+  column_to_rownames(var="BW_ID_dup")
+
+sample_data(ps.27may) <- new_sample_df 
+```
+
+```{r}
+subject_var <- "ppt_id"
+timepoint_var <- "time"
+
+sample_df <- sample_data(ps.27may) |> 
+  as.data.frame() |> 
+  as_tibble() 
+
+
+valid_subjects <- sample_df |> 
+  group_by(!!sym(subject_var), !!sym(timepoint_var)) |> 
+  summarise(n = n(), .groups = "drop") |> 
+  filter(n == 1) |> 
+  group_by(!!sym(subject_var)) |> 
+  summarise(n_timepoints = n(), .groups = "drop") |> 
+  filter(n_timepoints == 2) |> 
+  pull(!!sym(subject_var))
+
+
+filtered_sample_ids <- sample_df %>%
+  filter(!!sym(subject_var) %in% valid_subjects) %>%
+  group_by(!!sym(subject_var)) |> 
+  pull(BW_ID) |> 
+    as.character()  
+ 
+ps_filtered <- prune_samples(filtered_sample_ids, ps.27may)
+```
+
+```{r}
+df_1 <-sample_data(ps_filtered ) |> 
+      as.data.frame() |> 
+      as_tibble() 
+
+overview_antibiotic_over <-df_1 |> 
+  group_by(sr_scr_rand_group) |> 
+   summarize(
+    no_antibiotics_year_yes = sum(sr_base_healthHx_antibiotics == "yes", na.rm = TRUE),
+    no_antibiotics_year_no = sum(sr_base_healthHx_antibiotics =="no", na.rm = TRUE),
+     no_antibiotics_year_dont_know = sum(sr_base_healthHx_antibiotics == "dont_know", na.rm = TRUE),
+  )
+
+
+```
+```{r}
+overview_anidepress<-df_1 |> 
+  group_by(sr_scr_rand_group) |> 
+   summarize(
+    Antidepressant_yes = sum(sr_base_medTherapy_medAntiDep == "1", na.rm = TRUE),
+    Antidepressant_no = sum(sr_base_medTherapy_medAntiDep =="0", na.rm = TRUE)
+  )
+
+```
+
+```{r}
+ ps_anti_yes <- subset_samples(ps_filtered, sr_base_medTherapy_medAntiDep == "1")
+```
+
+```{r}
+ ps_act_out_anti <- subset_samples( ps_anti_yes, !sr_scr_rand_group == "hmp_active")
+```
+
+```{r}
+prev.filter  <- 0.01  
+abund.filter <- 0.001 
+winsor_q     <- 0.97   
+subject.var  <- "ppt_id"
+time.var     <- "time"
+change.base  <- "1"
+group.var    <- "sr_scr_rand_group"
+
+# -----------------------------
+# TSS normalization
+# -----------------------------
+ps_tss <- transform_sample_counts(
+  ps_act_out_anti ,
+  function(x) x / ifelse(sum(x) > 0, sum(x), 1)
+)
+
+# Ensure taxa are rows
+if (!taxa_are_rows(ps_tss)) {
+  otu_table(ps_tss) <- otu_table(t(otu_table(ps_tss)), taxa_are_rows = TRUE)
+}
+
+# -----------------------------
+# Extract data
+# -----------------------------
+OTU_raw <- as(otu_table(ps_tss), "matrix")   # taxa x samples
+md      <- as(sample_data(ps_tss), "data.frame")
+
+# -----------------------------
+# FILTERING (on RAW TSS)
+# -----------------------------
+keep_taxa <- rowMeans(OTU_raw > 0, na.rm = TRUE) >= prev.filter &
+  (if (is.infinite(abund.filter) && abund.filter < 0) TRUE 
+   else rowMeans(OTU_raw, na.rm = TRUE) >= abund.filter)
+
+OTU <- OTU_raw[keep_taxa, , drop = FALSE]
+
+# -----------------------------
+# ZERO IMPUTATION (after filtering)
+# -----------------------------
+impute_half_min_per_sample <- function(M, tiny = 0) {
+  half_min <- apply(M, 2, function(x) {
+    m <- suppressWarnings(min(x[x > 0], na.rm = TRUE))
+    if (!is.finite(m)) tiny else m / 2
+  })
+  repl <- matrix(half_min, nrow = nrow(M), ncol = ncol(M), byrow = TRUE)
+  zero_mat <- (M == 0) & !is.na(M)
+  M[zero_mat] <- repl[zero_mat]
+  M
+}
+
+OTU_imp <- impute_half_min_per_sample(OTU, tiny = 0)
+
+# -----------------------------
+#  Winsorization
+# -----------------------------
+winsorize_cols <- function(M, w = 0.97) {
+  lo_p <- (1 - w) / 2
+  hi_p <- 1 - lo_p
+  
+  for (j in seq_len(ncol(M))) {
+    xj <- M[, j]
+    qs <- quantile(xj, probs = c(lo_p, hi_p), na.rm = TRUE)
+    xj[xj < qs[1]] <- qs[1]
+    xj[xj > qs[2]] <- qs[2]
+    M[, j] <- xj
+  }
+  M
+}
+
+
+# -----------------------------
+# Rebuild phyloseq
+# -----------------------------
+ps_proc <- phyloseq(
+  otu_table(OTU_imp, taxa_are_rows = TRUE),
+  sample_data(ps_tss),
+  tax_table(ps_tss)[rownames(OTU_imp), , drop = FALSE]
+)
+
+# -----------------------------
+# Prepare metadata
+# -----------------------------
+sample_data(ps_proc)[[time.var]] <- forcats::fct_relevel(
+  as.factor(sample_data(ps_proc)[[time.var]]),
+  change.base
+)
+
+md  <- as(sample_data(ps_proc), "data.frame")
+OTU <- as(otu_table(ps_proc), "matrix")
+
+# -----------------------------
+# LONG FORMAT
+# -----------------------------
+df_long <- as.data.frame(OTU) |>
+  tibble::rownames_to_column("feature") |>
+  tidyr::pivot_longer(-feature, names_to = "Sample", values_to = "value") |>
+  dplyr::left_join(md |> tibble::rownames_to_column("Sample"), by = "Sample") |>
+  dplyr::filter(!is.na(.data[[time.var]])) |>
+  dplyr::mutate(.time = stringr::str_trim(as.character(.data[[time.var]])))
+
+# -----------------------------
+# -----------------------------
+valid_subjects <- df_long |>
+  dplyr::distinct(.data[[subject.var]], .time) |>
+  dplyr::count(.data[[subject.var]]) |>
+  dplyr::filter(n == 2) |>
+  dplyr::pull(!!rlang::sym(subject.var))
+
+df_long <- df_long |>
+  dplyr::filter(.data[[subject.var]] %in% valid_subjects)
+
+# -----------------------------
+# WIDE FORMAT (paired)
+# -----------------------------
+wide <- df_long |>
+  dplyr::select(feature, value, !!sym(subject.var), !!sym(group.var), .time) |>
+  tidyr::pivot_wider(names_from = .time, names_prefix = "T_", values_from = value)
+
+time_cols <- setdiff(colnames(wide), c("feature", subject.var, group.var))
+stopifnot(length(time_cols) == 2)
+
+base_col  <- paste0("T_", change.base)
+stopifnot(base_col %in% time_cols)
+
+other_col <- setdiff(time_cols, base_col)[1]
+
+# -----------------------------
+# COMPUTE RELATIVE CHANGE PER SUBJECT
+# -----------------------------
+relative_change_df <- wide |>
+  dplyr::mutate(
+    denom = .data[[other_col]] + .data[[base_col]],
+    change_rel_ms = dplyr::if_else(
+      denom == 0,
+      0,
+      (.data[[other_col]] - .data[[base_col]]) / denom
+    )
+  )
+
+# -----------------------------
+# GROUP-LEVEL SUMMARY
+# -----------------------------
+relative_change_df_UCFull <- relative_change_df |>
+  dplyr::group_by(feature, !!rlang::sym(group.var)) |>
+  dplyr::summarise(
+    mean_change = mean(change_rel_ms, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  tidyr::pivot_wider(
+    names_from = !!sym(group.var),
+    values_from = mean_change
+  )
+```
+
+
+
+```{r}
+ ps_anti_yes <- subset_samples(ps_filtered, sr_base_medTherapy_medAntiDep == "1")
+```
+
+```{r}
+ ps_full_out <- subset_samples( ps_anti_yes, !sr_scr_rand_group == "hmp_full")
+```
+
+
+```{r}
+prev.filter  <- 0.01  
+abund.filter <- 0.001 
+winsor_q     <- 0.97   
+subject.var  <- "ppt_id"
+time.var     <- "time"
+change.base  <- "1"
+group.var    <- "sr_scr_rand_group"
+
+# -----------------------------
+# TSS normalization
+# -----------------------------
+ps_tss <- transform_sample_counts(
+ ps_full_out,
+  function(x) x / ifelse(sum(x) > 0, sum(x), 1)
+)
+
+# Ensure taxa are rows
+if (!taxa_are_rows(ps_tss)) {
+  otu_table(ps_tss) <- otu_table(t(otu_table(ps_tss)), taxa_are_rows = TRUE)
+}
+
+# -----------------------------
+# Extract data
+# -----------------------------
+OTU_raw <- as(otu_table(ps_tss), "matrix")   # taxa x samples
+md      <- as(sample_data(ps_tss), "data.frame")
+
+# -----------------------------
+# FILTERING (on RAW TSS)
+# -----------------------------
+keep_taxa <- rowMeans(OTU_raw > 0, na.rm = TRUE) >= prev.filter &
+  (if (is.infinite(abund.filter) && abund.filter < 0) TRUE 
+   else rowMeans(OTU_raw, na.rm = TRUE) >= abund.filter)
+
+OTU <- OTU_raw[keep_taxa, , drop = FALSE]
+
+# -----------------------------
+# ZERO IMPUTATION (after filtering)
+# -----------------------------
+impute_half_min_per_sample <- function(M, tiny = 0) {
+  half_min <- apply(M, 2, function(x) {
+    m <- suppressWarnings(min(x[x > 0], na.rm = TRUE))
+    if (!is.finite(m)) tiny else m / 2
+  })
+  repl <- matrix(half_min, nrow = nrow(M), ncol = ncol(M), byrow = TRUE)
+  zero_mat <- (M == 0) & !is.na(M)
+  M[zero_mat] <- repl[zero_mat]
+  M
+}
+
+OTU_imp <- impute_half_min_per_sample(OTU, tiny = 0)
+
+# -----------------------------
+#  Winsorization
+# -----------------------------
+winsorize_cols <- function(M, w = 0.97) {
+  lo_p <- (1 - w) / 2
+  hi_p <- 1 - lo_p
+  
+  for (j in seq_len(ncol(M))) {
+    xj <- M[, j]
+    qs <- quantile(xj, probs = c(lo_p, hi_p), na.rm = TRUE)
+    xj[xj < qs[1]] <- qs[1]
+    xj[xj > qs[2]] <- qs[2]
+    M[, j] <- xj
+  }
+  M
+}
+
+# -----------------------------
+# Rebuild phyloseq
+# -----------------------------
+ps_proc <- phyloseq(
+  otu_table(OTU_imp, taxa_are_rows = TRUE),
+  sample_data(ps_tss),
+  tax_table(ps_tss)[rownames(OTU_imp), , drop = FALSE]
+)
+
+# -----------------------------
+# Prepare metadata
+# -----------------------------
+sample_data(ps_proc)[[time.var]] <- forcats::fct_relevel(
+  as.factor(sample_data(ps_proc)[[time.var]]),
+  change.base
+)
+
+md  <- as(sample_data(ps_proc), "data.frame")
+OTU <- as(otu_table(ps_proc), "matrix")
+
+# -----------------------------
+# LONG FORMAT
+# -----------------------------
+df_long <- as.data.frame(OTU) |>
+  tibble::rownames_to_column("feature") |>
+  tidyr::pivot_longer(-feature, names_to = "Sample", values_to = "value") |>
+  dplyr::left_join(md |> tibble::rownames_to_column("Sample"), by = "Sample") |>
+  dplyr::filter(!is.na(.data[[time.var]])) |>
+  dplyr::mutate(.time = stringr::str_trim(as.character(.data[[time.var]])))
+
+# -----------------------------
+# -----------------------------
+valid_subjects <- df_long |>
+  dplyr::distinct(.data[[subject.var]], .time) |>
+  dplyr::count(.data[[subject.var]]) |>
+  dplyr::filter(n == 2) |>
+  dplyr::pull(!!rlang::sym(subject.var))
+
+df_long <- df_long |>
+  dplyr::filter(.data[[subject.var]] %in% valid_subjects)
+
+# -----------------------------
+# WIDE FORMAT (paired)
+# -----------------------------
+wide <- df_long |>
+  dplyr::select(feature, value, !!sym(subject.var), !!sym(group.var), .time) |>
+  tidyr::pivot_wider(names_from = .time, names_prefix = "T_", values_from = value)
+
+time_cols <- setdiff(colnames(wide), c("feature", subject.var, group.var))
+stopifnot(length(time_cols) == 2)
+
+base_col  <- paste0("T_", change.base)
+stopifnot(base_col %in% time_cols)
+
+other_col <- setdiff(time_cols, base_col)[1]
+
+# -----------------------------
+# COMPUTE RELATIVE CHANGE PER SUBJECT
+# -----------------------------
+relative_change_df <- wide |>
+  dplyr::mutate(
+    denom = .data[[other_col]] + .data[[base_col]],
+    change_rel_ms = dplyr::if_else(
+      denom == 0,
+      0,
+      (.data[[other_col]] - .data[[base_col]]) / denom
+    )
+  )
+
+# -----------------------------
+# GROUP-LEVEL SUMMARY
+# -----------------------------
+relative_change_df_UCActive <- relative_change_df |>
+  dplyr::group_by(feature, !!rlang::sym(group.var)) |>
+  dplyr::summarise(
+    mean_change = mean(change_rel_ms, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  tidyr::pivot_wider(
+    names_from = !!sym(group.var),
+    values_from = mean_change
+  )
+```
+
+
+```{r}
+features_of_interest <-sig_taxa |> 
+                      pull(ASV)
+
+
+relative_change.1 <-relative_change_df_UCFull |> 
+  filter (feature %in%features_of_interest )
+
+relative_change.2 <-relative_change_df_UCActive |> 
+  filter (feature %in%features_of_interest )
+
+relative_change_fulldf <- relative_change.1|> 
+            left_join(relative_change.2, by= "feature")
+
+
+features_of_interest_full <-sig_taxa |> 
+                       filter (group=="UCvFull") |> 
+                      pull(ASV)
+
+relative_change_full_df1 <-relative_change_fulldf |> 
+  filter (feature %in%features_of_interest_full )
+
+```
+```{r}
+
+tax <- tax_table(ps.27may)
+tax_with_asv <- cbind(ASV = rownames(tax), tax)
+tax_table(ps.27may) <- tax_table(tax_with_asv)
+
+tax_with_asv_df <- as.data.frame(tax_with_asv)
+
+SCFA_taxa<-tax_with_asv_df |> 
+  mutate(genus_species = str_c(Genus, Species, sep = " ")) |> 
+  left_join(scfa_list ) |> 
+  mutate(across(c(Butyrate, Propionate, Acetate, Formate), ~ replace_na(.x, 0)))
+```
+
+```{r}
+
+
+heat_df.1 <-relative_change_full_df1 |>
+  rename(ASV = feature) |>
+  left_join(SCFA_taxa, by = "ASV") |>
+  unite("taxa",Family,Genus, Species, ASV,sep = " ") |> 
+  unique()
+
+
+heat_mat <- heat_df.1 |> 
+   dplyr::select(taxa, hmp_full, hmp_active, uc.x) |> 
+  column_to_rownames(var="taxa") |> 
+  as.matrix() 
+
+row_annotation <- heat_df.1 |> 
+  select(taxa, Butyrate, Propionate, Acetate, Formate) |> 
+  mutate(across(c(Butyrate, Propionate, Acetate, Formate), as.character)) |> 
+  column_to_rownames("taxa")
+
+
+scfa_colors <- list(
+  Butyrate    = c("1" = "#FFFACD", "0" = "grey90"),
+  Propionate  = c("1" = "#FFFACD", "0" = "grey90"),
+  Acetate     = c("1" = "#FFFACD", "0" = "grey90"),
+  Formate     = c("1" = "#FFFACD", "0" = "grey90")
+)
+
+col_annotation <- data.frame(
+  Treatment = c("uc", "hmp_active","hmp_full")
+)
+row.names(col_annotation) <- colnames(heat_mat)
+
+col_colors <- list(
+  Treatment = c(
+    hmp_active = "#DF8F44",
+      hmp_full   = "#374E55",
+      uc         = "#00A1D5"
+  )
+)
+
+pheatmap(
+heat_mat,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  fontsize_row = 7,
+  cellheight = 7,
+  border_color = NA,
+   colorRampPalette(c("#137665","#81beb4" ,"#dfd8d2","#846a77", "#3d222f"))(1000),
+na_col = "black",
+  annotation_col = col_annotation,
+  annotation_row = row_annotation,
+  annotation_colors = c(col_colors, scfa_colors)
+)
+```

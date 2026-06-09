@@ -1,0 +1,252 @@
+---
+title: "Sensivity antibiotics: HMP Psychoed vs. HMP Full"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+library(MicrobiomeStat)
+library(tidyverse)
+library(phyloseq)
+})
+```
+
+```{r}
+antibiotics.1 <- antibiotics |> 
+  select(id,sr_base_healthHx_antibiotics,
+         sr_base_healthHx_antibiotics2y18y,
+         sr_base_healthHx_antibioticsPre2yrs, sr_base_medTherapy_medAntiDep) |> 
+  rename( ppt_id= id)
+```
+
+```{r}
+new_sample_df <- sample_data(ps.27may) |> 
+  data.frame() |> 
+  dplyr::left_join(antibiotics.1, by = "ppt_id") |> 
+  mutate(BW_ID_dup = BW_ID) |> 
+  column_to_rownames(var="BW_ID_dup")
+
+sample_data(ps.27may) <- new_sample_df 
+```
+
+```{r}
+subject_var <- "ppt_id"
+timepoint_var <- "time"
+
+sample_df <- sample_data(ps.27may) |> 
+  as.data.frame() |> 
+  as_tibble() 
+
+
+valid_subjects <- sample_df |> 
+  group_by(!!sym(subject_var), !!sym(timepoint_var)) |> 
+  summarise(n = n(), .groups = "drop") |> 
+  filter(n == 1) |> 
+  group_by(!!sym(subject_var)) |> 
+  summarise(n_timepoints = n(), .groups = "drop") |> 
+  filter(n_timepoints == 2) |> 
+  pull(!!sym(subject_var))
+
+
+filtered_sample_ids <- sample_df %>%
+  filter(!!sym(subject_var) %in% valid_subjects) %>%
+  group_by(!!sym(subject_var)) |> 
+  pull(BW_ID) |> 
+    as.character()  
+ 
+ps_filtered <- prune_samples(filtered_sample_ids, ps.27may)
+```
+Making a table that shows the numbers of people in each category
+
+```{r}
+df_1 <-sample_data(ps_filtered ) |> 
+      as.data.frame() |> 
+      as_tibble() 
+
+overview_antibiotic_over <-df_1 |> 
+  group_by(sr_scr_rand_group) |> 
+   summarize(
+    no_antibiotics_year_yes = sum(sr_base_healthHx_antibiotics == "yes", na.rm = TRUE),
+    no_antibiotics_year_no = sum(sr_base_healthHx_antibiotics =="no", na.rm = TRUE),
+     no_antibiotics_year_dont_know = sum(sr_base_healthHx_antibiotics == "dont_know", na.rm = TRUE),
+  )
+
+```
+```{r}
+overview_anidepress<-df_1 |> 
+  group_by(sr_scr_rand_group) |> 
+   summarize(
+    Antidepressant_yes = sum(sr_base_medTherapy_medAntiDep == "1", na.rm = TRUE),
+    Antidepressant_no = sum(sr_base_medTherapy_medAntiDep =="0", na.rm = TRUE)
+  )
+```
+
+```{r}
+tax <- tax_table(ps_filtered)
+tax_with_asv <- cbind(ASV = rownames(tax), tax)
+
+
+tax_table(ps_filtered) <- tax_table(tax_with_asv)
+
+tax_with_asv_df <- as.data.frame(tax_with_asv)
+```
+
+```{r}
+ ps_uc_out <- subset_samples( ps_filtered, !sr_scr_rand_group == "uc")
+```
+
+```{r}
+data.obj_uc_out <- mStat_convert_phyloseq_to_data_obj( ps_uc_out)
+```
+
+```{r}
+full_act <- generate_taxa_change_test_pair(
+  data.obj =   data.obj_uc_out,
+  subject.var = "ppt_id",
+  time.var = "time",
+  group.var = "sr_scr_rand_group",
+  change.base = "1",
+  feature.change.func = "relative change",
+  feature.level = "ASV",
+  prev.filter = 0.01,
+  abund.filter = 0.001,
+  feature.dat.type = "count"
+)
+
+UCAct<-as.data.frame(full_act$ASV$`hmp_full vs hmp_active (Reference)`)
+
+```
+
+```{r}
+
+UCAct_test <-UCAct |> 
+            mutate (test_stat = Coefficient/SE)
+```
+
+
+```{r}
+ ps_antibiotics_yes <- subset_samples(ps_filtered, sr_base_medTherapy_medAntiDep == "1")
+```
+
+```{r}
+ ps_uc_out_anti <- subset_samples( ps_antibiotics_yes, !sr_scr_rand_group == "uc")
+```
+
+```{r}
+data.obj_anti <- mStat_convert_phyloseq_to_data_obj( ps_uc_out_anti)
+```
+
+```{r}
+full_act_anti <- generate_taxa_change_test_pair(
+  data.obj =   data.obj_anti ,
+  subject.var = "ppt_id",
+  time.var = "time",
+  group.var = "sr_scr_rand_group",
+  change.base = "1",
+  feature.change.func = "relative change",
+  feature.level = "ASV",
+  prev.filter = 0.01,
+  abund.filter = 0.001,
+  feature.dat.type = "count"
+)
+
+UCAct_anti<-as.data.frame(full_act_anti$ASV$`hmp_full vs hmp_active (Reference)`)
+```
+
+
+```{r}
+UCAct_anti_test <-UCAct_anti |> 
+            mutate (test_stat = Coefficient/SE)
+```
+
+
+
+```{r}
+ ps_antibiotics_no <- subset_samples(ps_filtered, sr_base_medTherapy_medAntiDep == "0")
+```
+
+```{r}
+ ps_uc_out_no_anti <- subset_samples( ps_antibiotics_no, !sr_scr_rand_group == "hmp_uc")
+```
+
+```{r}
+data.obj_no_anti <- mStat_convert_phyloseq_to_data_obj( ps_uc_out_no_anti)
+```
+
+```{r}
+full_act_no_anti <- generate_taxa_change_test_pair(
+  data.obj =   data.obj_no_anti ,
+  subject.var = "ppt_id",
+  time.var = "time",
+  group.var = "sr_scr_rand_group",
+  change.base = "1",
+  feature.change.func = "relative change",
+  feature.level = "ASV",
+  prev.filter = 0.01,
+  abund.filter = 0.001,
+  feature.dat.type = "count"
+)
+
+UCAct_no_anti<-as.data.frame(full_act_no_anti$ASV$`hmp_full vs hmp_active (Reference)`)
+```
+
+```{r}
+UCAct_no_anti_test <-UCAct_no_anti |> 
+            mutate (test_stat = Coefficient/SE)
+```
+
+```{r}
+one <-UCAct_test|> 
+  mutate(comparison ="FullvAct",
+         Antidepresant_use = "all persons",
+         ASV=Variable) |> 
+  select ( ASV, comparison, SE, Antidepresant_use,Coefficient,  P.Value,Adjusted.P.Value , comparison,test_stat)
+  
+
+two<-UCAct_anti_test|> 
+  mutate(comparison ="FullvAct",
+         Antidepresant_use = "antidepressant use ",
+         ASV=Variable) |> 
+  select ( ASV, comparison, SE, Antidepresant_use,Coefficient,  P.Value,Adjusted.P.Value , comparison,test_stat)
+  
+
+three<-UCAct_no_anti_test|> 
+  mutate(comparison ="FullvAct",
+         Antidepresant_use = "No antidepressant use ",
+         ASV=Variable) |> 
+  select ( ASV, comparison, SE, Antidepresant_use, Coefficient,P.Value, Adjusted.P.Value , comparison, test_stat)
+
+results  <-rbind (one, two, three)
+```
+
+```{r}
+results.test <-results |> 
+  select ( ASV, Antidepresant_use,test_stat) |> 
+  pivot_wider(names_from = Antidepresant_use, values_from = test_stat)
+
+
+cor_coef <- cor.test(results.test$`all persons`,
+                results.test$`antidepressant use `,
+                
+                method = "pearson")
+
+cor_coef
+
+results.test |>
+  ggplot(aes(
+    x = (`all persons`),
+    y = (`antidepressant use `)
+  )) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color= "grey30", linetype= "dashed",   size = 1    ) +
+ labs(
+   title = "Comparison of Test-statictic with and without antidepressant use",
+   subtitle = "HMP Psychoed vs HMP-Full",
+    x = "Full data set (Test-statictic)",
+    y = "Participants with antidepressant use (Test-statictic)"
+  )+
+  theme_classic ()
+```
+
+`
+

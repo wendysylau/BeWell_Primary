@@ -1,0 +1,424 @@
+---
+title: "Sensitvity test:Antidepressant use Physcoed vs Full"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+library(MicrobiomeStat)
+library(tidyverse)
+library(phyloseq)
+})
+```
+
+```{r}
+antibiotics.1 <- antibiotics |> 
+  select(id,sr_base_healthHx_antibiotics,
+         sr_base_healthHx_antibiotics2y18y,
+         sr_base_healthHx_antibioticsPre2yrs, sr_base_medTherapy_medAntiDep) |> 
+  rename( ppt_id= id)
+```
+
+Joining new dataframe into the ps object
+```{r}
+new_sample_df <- sample_data(ps.27may) |> 
+  data.frame() |> 
+  dplyr::left_join(antibiotics.1, by = "ppt_id") |> 
+  mutate(BW_ID_dup = BW_ID) |> 
+  column_to_rownames(var="BW_ID_dup")
+
+sample_data(ps.27may) <- new_sample_df 
+```
+
+Filtering so that all samples are paired across timepoints
+```{r}
+subject_var <- "ppt_id"
+timepoint_var <- "time"
+
+sample_df <- sample_data(ps.27may) |> 
+  as.data.frame() |> 
+  as_tibble() 
+
+
+valid_subjects <- sample_df |> 
+  group_by(!!sym(subject_var), !!sym(timepoint_var)) |> 
+  summarise(n = n(), .groups = "drop") |> 
+  filter(n == 1) |> 
+  group_by(!!sym(subject_var)) |> 
+  summarise(n_timepoints = n(), .groups = "drop") |> 
+  filter(n_timepoints == 2) |> 
+  pull(!!sym(subject_var))
+
+
+filtered_sample_ids <- sample_df %>%
+  filter(!!sym(subject_var) %in% valid_subjects) %>%
+  group_by(!!sym(subject_var)) |> 
+  pull(BW_ID) |> 
+    as.character()  
+ 
+ps_filtered <- prune_samples(filtered_sample_ids, ps.27may)
+```
+Making a table that shows the numbers of people in each category
+
+```{r}
+df_1 <-sample_data(ps_filtered ) |> 
+      as.data.frame() |> 
+      as_tibble() 
+
+overview_antibiotic_over <-df_1 |> 
+  group_by(sr_scr_rand_group) |> 
+   summarize(
+    no_antibiotics_year_yes = sum(sr_base_healthHx_antibiotics == "yes", na.rm = TRUE),
+    no_antibiotics_year_no = sum(sr_base_healthHx_antibiotics =="no", na.rm = TRUE),
+     no_antibiotics_year_dont_know = sum(sr_base_healthHx_antibiotics == "dont_know", na.rm = TRUE),
+  )
+
+overview_antibiotic_over
+```
+```{r}
+overview_anidepress<-df_1 |> 
+  group_by(sr_scr_rand_group) |> 
+   summarize(
+    Antidepressant_yes = sum(sr_base_medTherapy_medAntiDep == "1", na.rm = TRUE),
+    Antidepressant_no = sum(sr_base_medTherapy_medAntiDep =="0", na.rm = TRUE)
+  )
+overview_anidepress
+```
+
+Making taxonomy df
+```{r}
+tax <- tax_table(ps_filtered)
+# Add ASV column using rownames of the OTU table
+tax_with_asv <- cbind(ASV = rownames(tax), tax)
+
+# Assign the modified taxonomy table back
+tax_table(ps_filtered) <- tax_table(tax_with_asv)
+
+tax_with_asv_df <- as.data.frame(tax_with_asv)
+```
+
+
+
+```{r}
+ ps_uc_out <- subset_samples( ps_filtered, !sr_scr_rand_group == "uc")
+```
+Making a microbiomStat object
+```{r}
+data.obj_uc_out <- mStat_convert_phyloseq_to_data_obj( ps_uc_out)
+```
+
+```{r}
+act_full <- generate_taxa_change_test_pair(
+  data.obj =   data.obj_uc_out,
+  subject.var = "ppt_id",
+  time.var = "time",
+  group.var = "sr_scr_rand_group",
+  change.base = "1",
+  feature.change.func = "relative change",
+  feature.level = "ASV",
+  prev.filter = 0.01,
+  abund.filter = 0.001,
+  feature.dat.type = "count"
+)
+
+fullact<-as.data.frame(act_full$ASV$`hmp_full vs hmp_active (Reference)`)
+
+```
+
+```{r}
+
+fullact_test <-fullact |> 
+            mutate (test_stat = Coefficient/SE)
+```
+
+
+```{r}
+fullact.1 <-fullact |> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1 ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+
+fullact.2 <-
+fullact.1|> 
+  filter( significance =="Significant") |> 
+  left_join(tax_with_asv_df) |> 
+  arrange(significance) 
+
+```
+
+```{r}
+fullact<-as.data.frame(act_full$ASV$`hmp_full vs hmp_active (Reference)`)
+
+fullact.1 <-fullact|> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(switch_relative_change = -relative_change) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1 & abs(switch_relative_change) <1 ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+   
+   highly_significant_data <- fullact.1 |> 
+  filter(significance == "Significant")
+   
+fullact.1|> 
+  ggplot(aes(x = switch_relative_change, y = -log10(Adjusted.P.Value ),color = significance)) +
+        geom_point(aes(size = 2) )+
+        scale_color_manual(values = c("Significant" = "#f4945b", 
+                                      "Not Significant" = "#d7d7e4")) +
+        
+  theme_bw() +
+        labs(
+              title = "HMP act vs full",
+              x = "Relative Change",
+              y = "-Log10(P-value)"
+            ) +
+        geom_hline(yintercept = -log10(0.1), linetype = "dashed", color = "#A0C8F0", alpha=0.5) 
+```
+
+```{r}
+ ps_antibiotics_yes <- subset_samples(ps_filtered, sr_base_medTherapy_medAntiDep == "1")
+```
+
+```{r}
+ ps_uc_out_anti <- subset_samples( ps_antibiotics_yes, !sr_scr_rand_group == "uc")
+```
+Making a microbiomStat object
+```{r}
+data.obj_anti <- mStat_convert_phyloseq_to_data_obj( ps_uc_out_anti)
+```
+
+```{r}
+act_full_anti <- generate_taxa_change_test_pair(
+  data.obj =   data.obj_anti ,
+  subject.var = "ppt_id",
+  time.var = "time",
+  group.var = "sr_scr_rand_group",
+  change.base = "1",
+  feature.change.func = "relative change",
+  feature.level = "ASV",
+  prev.filter = 0.01,
+  abund.filter = 0.001,
+  feature.dat.type = "count"
+)
+
+fullact_anti<-as.data.frame(act_full_anti$ASV$`hmp_full vs hmp_active (Reference)`)
+```
+
+
+```{r}
+fullact_anti_test <-fullact_anti |> 
+            mutate (test_stat = Coefficient/SE)
+```
+
+```{r}
+
+fullact.1_anti <-fullact_anti |> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.26 ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+
+fullact.2_anti <-
+fullact.1_anti|> 
+  filter( significance =="Significant") |> 
+  left_join(tax_with_asv_df) |> 
+  arrange(significance) 
+
+```
+
+```{r}
+fullact_anti<-as.data.frame(act_full_anti$ASV$`hmp_full vs hmp_active (Reference)`)
+
+fullact.1_anti <-fullact_anti|> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(switch_relative_change = -relative_change) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1  ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+   
+   highly_significant_data_anti <- fullact.1_anti |> 
+  filter(significance == "Significant")
+   
+fullact.1_anti|> 
+  ggplot(aes(x = switch_relative_change, y = -log10(Adjusted.P.Value ),color = significance)) +
+        geom_point(aes(size = 2) )+
+        scale_color_manual(values = c("Significant" = "#f4945b", 
+                                      "Not Significant" = "#d7d7e4")) +
+        
+  theme_bw() +
+        labs(
+              title = "HMP Active vs HMP Full (with antidepressants)",
+              x = "Relative Change",
+              y = "-Log10(P-value)"
+            ) +
+        geom_hline(yintercept = -log10(0.1), linetype = "dashed", color = "#A0C8F0", alpha=0.5) 
+```
+
+
+
+```{r}
+ ps_antibiotics_no <- subset_samples(ps_filtered, sr_base_medTherapy_medAntiDep == "0")
+```
+
+
+```{r}
+ ps_full_out_no_anti <- subset_samples( ps_antibiotics_no, !sr_scr_rand_group == "uc")
+```
+Making a microbiomStat object
+```{r}
+data.obj_no_anti <- mStat_convert_phyloseq_to_data_obj( ps_full_out_no_anti)
+```
+
+```{r}
+act_uc_no_anti <- generate_taxa_change_test_pair(
+  data.obj =   data.obj_no_anti ,
+  subject.var = "ppt_id",
+  time.var = "time",
+  group.var = "sr_scr_rand_group",
+  change.base = "1",
+  feature.change.func = "relative change",
+  feature.level = "ASV",
+  prev.filter = 0.01,
+  abund.filter = 0.001,
+  feature.dat.type = "count"
+)
+
+fullact_no_anti<-as.data.frame(act_uc_no_anti$ASV$`hmp_full vs hmp_active (Reference)`)
+```
+
+```{r}
+fullact_no_anti_test <-fullact_no_anti |> 
+            mutate (test_stat = Coefficient/SE)
+```
+
+```{r}
+
+fullact.1_no_anti <-fullact_no_anti |> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1 ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+
+fullact.2_no_anti <-
+fullact.1_no_anti|> 
+  filter( significance =="Significant") |> 
+  left_join(tax_with_asv_df) |> 
+  arrange(significance) 
+
+```
+
+```{r}
+fullact_no_anti<-as.data.frame(act_uc_no_anti$ASV$`hmp_full vs hmp_active (Reference)`)
+
+fullact.1_no_anti <-fullact_no_anti|> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(switch_relative_change = -relative_change) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1  ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+   
+   highly_significant_data_no_anti <- fullact.1_no_anti |> 
+  filter(significance == "Significant")
+   
+fullact.1_no_anti|> 
+  ggplot(aes(x = switch_relative_change, y = -log10(Adjusted.P.Value ),color = significance)) +
+        geom_point(aes(size = 2) )+
+        scale_color_manual(values = c("Significant" = "#f4945b", 
+                                      "Not Significant" = "#d7d7e4")) +
+        
+  theme_bw() +
+        labs(
+              title = "HMP Active vs Full (no antidepressants)",
+              x = "Relative Change",
+              y = "-Log10(P-value)"
+            ) +
+        geom_hline(yintercept = -log10(0.1), linetype = "dashed", color = "#A0C8F0", alpha=0.5) 
+```
+
+Output table
+```{r}
+one <-fullact_test|> 
+  mutate(comparison ="actvfull",
+         Antidepresant_use = "all persons",
+         ASV=Variable) |> 
+  select ( ASV, comparison, SE, Antidepresant_use,Coefficient,  P.Value,Adjusted.P.Value , comparison,test_stat)
+  
+
+two<-fullact_anti_test|> 
+  mutate(comparison ="actvfull",
+         Antidepresant_use = "antidepressant use ",
+         ASV=Variable) |> 
+  select ( ASV, comparison, SE, Antidepresant_use,Coefficient,  P.Value,Adjusted.P.Value , comparison,test_stat)
+  
+
+three<-fullact_no_anti_test|> 
+  mutate(comparison ="actvfull",
+         Antidepresant_use = "No antidepressant use ",
+         ASV=Variable) |> 
+  select ( ASV, comparison, SE, Antidepresant_use, Coefficient,P.Value, Adjusted.P.Value , comparison, test_stat)
+
+results  <-rbind (one, two, three)
+```
+
+
+
+```{r}
+results.test <-results |> 
+  select ( ASV, Antidepresant_use,test_stat) |> 
+  pivot_wider(names_from = Antidepresant_use, values_from = test_stat)
+
+
+cor_coef <- cor(results.test$`all persons`,
+                results.test$`antidepressant use `,
+                use = "complete.obs")
+
+cor_coef
+wilcox_res <- wilcox.test(
+  results.test$`antidepressant use `,
+  results.test$`all persons`,
+  paired = TRUE
+)
+wilcox_res 
+
+results.test |>
+  ggplot(aes(
+    x = (`all persons`),
+    y = (`antidepressant use `)
+  )) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color= "grey30", linetype= "dashed",   size = 1    ) +
+ labs(
+   title = "Comparison of effect sizes with and without antidepressant use",
+   subtitle = "hmp full vs HMP-Active (cor=0.580)",
+    x = "Full data set (Test-statictic)",
+    y = "Participants with antidepressant use (Test-statictic)"
+  )+
+  theme_classic ()
+```
+
+
+

@@ -1,0 +1,279 @@
+---
+title: "Microbiome-MicrobiomeStat"
+output: html_document
+---
+We used the generate_taxa_test_pair function from MicrobiomeStat (v1.3.2)  to evaluate how the intervention influenced microbiome composition for participants whose samples were collected at both time points. Relative changes in ASV abundances between treatment groups were quantified using a change-score framework, which models within-subject temporal differences and enhances sensitivity to treatment-driven effects.
+
+```{r }
+library(MicrobiomeStat)
+library(tidyverse)
+library(phyloseq)
+library(ggrepel)
+```
+
+```{r}
+
+subject_var <- "ppt_id"
+timepoint_var <- "time"
+
+
+sample_df <- sample_data(ps.27may) |> 
+  as.data.frame() |> 
+  as_tibble()
+
+
+valid_subjects <- sample_df |> 
+  group_by(!!sym(subject_var), !!sym(timepoint_var)) |> 
+  summarise(n = n(), .groups = "drop") |> 
+  filter(n == 1) |> 
+  group_by(!!sym(subject_var)) |> 
+  summarise(n_timepoints = n(), .groups = "drop") |> 
+  filter(n_timepoints == 2) |> 
+  pull(!!sym(subject_var))
+
+
+filtered_sample_ids <- sample_df %>%
+  filter(!!sym(subject_var) %in% valid_subjects) %>%
+  group_by(!!sym(subject_var)) |> 
+  pull(BW_ID) |> 
+    as.character()  
+
+
+ps_filtered <- prune_samples(filtered_sample_ids, ps.27may)
+```
+
+```{r}
+tax <- tax_table(ps_filtered )
+tax_with_asv <- cbind(ASV = rownames(tax), tax)
+tax_table(ps_filtered) <- tax_table(tax_with_asv)
+tax_with_asv_df <- as.data.frame(tax_with_asv)
+```
+
+HMP Full vs HMP Active
+```{r}
+ ps_uc_out <- subset_samples(ps_filtered, !sr_scr_rand_group == "uc")
+
+data.obj <- mStat_convert_phyloseq_to_data_obj( ps_uc_out)
+
+# Generate taxa change test pair
+full_active<- generate_taxa_change_test_pair(
+  data.obj =   data.obj,
+  subject.var = "ppt_id",
+  time.var = "time",
+  group.var = "sr_scr_rand_group",
+  change.base = "1",
+  feature.change.func = "relative change",
+  feature.level = "ASV",
+  prev.filter = 0.01,
+  abund.filter = 0.001,
+  feature.dat.type = "count"
+)
+
+FullActive<-as.data.frame(full_active$ASV$`hmp_full vs hmp_active (Reference)`)
+
+FullActive.1 <-FullActive |> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1  ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+
+FullActive.2 <-
+FullActive.1|> 
+  filter( significance =="Significant") |> 
+  left_join(tax_with_asv_df) |> 
+  arrange(significance) 
+
+FullActive<-as.data.frame(full_active$ASV$`hmp_full vs hmp_active (Reference)`)
+
+FullActive.1 <-FullActive|> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1 & abs(relative_change) <1 ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+   
+   highly_significant_data <- FullActive.1 |> 
+  filter(significance == "Significant")
+   
+FullActive.1|> 
+  ggplot(aes(x = relative_change, y = -log10(Adjusted.P.Value ),color = significance)) +
+        geom_point(aes(size = 2) )+
+        scale_color_manual(values = c("Significant" = "#f4945b", 
+                                      "Not Significant" = "#d7d7e4")) +
+        
+  theme_bw() +
+        labs(
+              title = "HMP Full vs HMP Active",
+              x = "Relative Change",
+              y = "-Log10(P-value)"
+            ) +
+        geom_hline(yintercept = -log10(0.1), linetype = "dashed", color = "#A0C8F0", alpha=0.5) 
+```
+
+
+HMP Active vs UC
+```{r}
+ ps_full_out <- subset_samples(ps_filtered, !sr_scr_rand_group == "hmp_full")
+
+data.obj_full_out <- mStat_convert_phyloseq_to_data_obj(ps_full_out)
+
+# Generate taxa change test pair
+active_uc <- generate_taxa_change_test_pair(
+  data.obj =   data.obj_full_out,
+  subject.var = "ppt_id",
+  time.var = "time",
+  group.var = "sr_scr_rand_group",
+  change.base = "1",
+  feature.change.func = "relative change",
+  feature.level = "ASV",
+  prev.filter = 0.01,
+  abund.filter = 0.001,
+  feature.dat.type = "count"
+)
+
+UCActive<-as.data.frame(active_uc$ASV$`uc vs hmp_active (Reference)`)
+
+UCActive.1 <-UCActive |> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1 ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+
+UCActive.2 <-
+ UCActive.1|> 
+  filter( significance =="Significant") |> 
+  left_join(tax_with_asv_df) |> 
+  arrange(significance) 
+
+
+UCActive<-as.data.frame(active_uc$ASV$`uc vs hmp_active (Reference)`)
+
+UCActive.1 <-UCActive |> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(switch_relative_change = -relative_change) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1 & abs(switch_relative_change) <1 ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+   
+   highly_significant_data <- UCActive.1 |> 
+  filter(significance == "Significant")
+   
+  UCActive.1|> 
+  ggplot(aes(x = switch_relative_change, y = -log10(Adjusted.P.Value ),color = significance)) +
+        geom_point(aes(size = 2) )+
+        scale_color_manual(values = c("Significant" = "#f4945b", 
+                                      "Not Significant" = "#d7d7e4")) +
+        
+  theme_bw() +
+        labs(
+              title = "HMP Active vs UC",
+              x = "Relative Change",
+              y = "-Log10(P-value)"
+            ) +
+        geom_hline(yintercept = -log10(0.1), linetype = "dashed", color = "#A0C8F0", alpha=0.5) 
+```
+
+HMP Full vs UC
+```{r}
+ ps_act_out <- subset_samples(ps_filtered, !sr_scr_rand_group == "hmp_active")
+data.obj_act_out <- mStat_convert_phyloseq_to_data_obj(ps_act_out)
+
+# Generate taxa change test pair
+full_uc <- generate_taxa_change_test_pair(
+  data.obj =   data.obj_act_out,
+  subject.var = "ppt_id",
+  time.var = "time",
+  group.var = "sr_scr_rand_group",
+  change.base = "1",
+  feature.change.func = "relative change",
+  feature.level = "ASV",
+  prev.filter = 0.01,
+  abund.filter = 0.001,
+  feature.dat.type = "count"
+)
+
+UCFull<-as.data.frame(full_uc$ASV$`uc vs hmp_full (Reference)`)
+
+
+UCFull.1 <-UCFull |> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1 ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+
+UCFull.2 <-
+UCFull.1|> 
+  filter( significance =="Significant") |> 
+  left_join(tax_with_asv_df) |> 
+  arrange(significance) 
+
+
+UCFull<-as.data.frame(full_uc$ASV$`uc vs hmp_full (Reference)`)
+
+UCFull.1 <-UCFull|> 
+  as.data.frame() |> 
+rename (relative_change=Coefficient,
+        ASV=Variable) |> 
+  mutate(switch_relative_change = -relative_change) |> 
+  mutate(
+    significance = case_when(
+   Adjusted.P.Value < 0.1 & abs(switch_relative_change) <1 ~ "Significant",
+      TRUE ~ "Not Significant"
+    ))
+   
+   highly_significant_data <- UCFull.1 |> 
+  filter(significance == "Significant")
+   
+UCFull.1|> 
+  ggplot(aes(x = switch_relative_change, y = -log10(Adjusted.P.Value ),color = significance)) +
+        geom_point(aes(size = 2) )+
+        scale_color_manual(values = c("Significant" = "#f4945b", 
+                                      "Not Significant" = "#d7d7e4")) +
+        
+  theme_bw() +
+        labs(
+              title = "HMP Full vs UC",
+              x = "Relative Change",
+              y = "-Log10(P-value)"
+            ) +
+        geom_hline(yintercept = -log10(0.1), linetype = "dashed", color = "#A0C8F0", alpha=0.5) 
+```
+
+```{r}
+sig.full_active<-FullActive.2 |> 
+       dplyr::select(ASV,relative_change,significance) |> 
+      filter(!significance=="Not Significant") |> 
+      mutate(group="FullvActive")
+
+sig.uc_active<-UCActive.2 |> 
+       dplyr::select(ASV,relative_change,significance) |> 
+      filter(!significance=="Not Significant") |> 
+      mutate(group="UCvActive")
+
+sig.uc_full<-UCFull.2 |> 
+       dplyr::select(ASV,relative_change,significance) |> 
+      filter(!significance=="Not Significant") |> 
+      mutate(group="UCvFull")
+sig<- rbind(sig.uc_active, sig.uc_full,sig.full_active)
+
+```
+ 
