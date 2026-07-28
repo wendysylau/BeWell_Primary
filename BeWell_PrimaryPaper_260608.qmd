@@ -23,6 +23,7 @@ p_load(tidyverse,
        lmerTest,
        MuMIn,
        scales,
+       ggplot2,
        ggrepel,
        ggeffects,
        sjPlot,
@@ -49,7 +50,9 @@ p_load(tidyverse,
        VGAM,
        ggpubr, 
        corrplot,
-       performance)
+       performance,
+       glmmTMB,
+       DHARMa)
 options(scipen = 0)
 ```
 
@@ -3052,7 +3055,6 @@ fdr_correction <- function(summary_data, group_vars = c('var_prefix', 'model_typ
 ## Load df
 ```{r load_df}
 df <- read.csv(file = 'Z:/BeWell data/Full study/PrimaryPaper/BeWell_primaryPaper_deid.csv', na.strings = c("NaN", "", "NA")) %>%
-  rename(id = rand_id) %>% 
   mutate(sr_scr_rand_group =  factor(sr_scr_rand_group,
                                  levels = c('hmp_full', 'hmp_active', 'uc'))) %>% 
   mutate(gender_combined = recode_values(gender_combined,
@@ -3418,6 +3420,23 @@ desc_table_medTherapy <- df %>%
   ) %>% 
   mutate(mean = sprintf("%.0f", mean)) %>% 
   rename(Variable = variable)
+
+desc_table_IQR <- df %>% 
+  mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_base_cyto_il6_dbs_mean_AB),
+         dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
+  dplyr::select(all_of(c(sr_all))) |> 
+  summarise(
+    across(
+      everything(),
+      list(
+        IQR = ~ paste0(sprintf("%.2f", quantile(.x, 0.25, na.rm = TRUE)), " - ",  sprintf("%.2f", quantile(.x, 0.75, na.rm = TRUE)))
+      ),
+      .names = "{.col}"
+    )
+  ) |> 
+  pivot_longer(everything(),
+               names_to = "Variable",
+               values_to = "IQR")
   
 
 desc_table <- df %>% 
@@ -3431,12 +3450,15 @@ desc_table <- df %>%
   psych::describe() %>%
   as.data.frame() %>%
   tibble::rownames_to_column("Variable") %>%
-  dplyr::select(Variable, n, mean, sd # , 
+  dplyr::select(Variable, n, mean, sd, median #, 
                 # skew, kurtosis
                 ) %>%
   mutate(mean = as.character(sprintf("%.2f", mean)),
-         sd = as.character(sprintf("%.2f", sd))) %>% 
+         sd = as.character(sprintf("%.2f", sd)),
+         median = as.character(sprintf("%.2f", median))) %>% 
+  left_join(desc_table_IQR) |> 
   full_join(desc_table_medTherapy) %>% 
+  mutate(median_IQR = ifelse(Variable %in% sr_all, paste0(median, " (", IQR, ")"), "")) %>% 
   mutate(n = as.integer(n)) %>%
   mutate(
     Title = sapply(Variable, map_title, title_map = target_titles),
@@ -3455,10 +3477,11 @@ desc_table <- df %>%
     Time_order = factor(Time, levels = time_order)
   ) %>%
   arrange(Title_order, Time_order) %>%
-  dplyr::select(Title, Time, n, mean, sd
+  dplyr::select(Title, Time, n, mean, sd, median_IQR
                 ) %>% 
   rename('Mean/Count' = mean,
-         'SD/%' = sd)
+         'SD/%' = sd,
+         'Median (IQR)' = median_IQR)
 
 # By group
 group_lvs <- as.character(levels(df$sr_scr_rand_group))
@@ -3478,6 +3501,24 @@ for (group_lv in group_lvs) {
     mutate(mean = sprintf("%.0f", mean)) %>% 
     rename(Variable = variable)
   
+  desc_table_IQR_tmp <- df %>% 
+    filter(sr_scr_rand_group == group_lv) %>%
+    mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_base_cyto_il6_dbs_mean_AB),
+           dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
+    dplyr::select(all_of(c(sr_all))) |> 
+    summarise(
+      across(
+        everything(),
+        list(
+          IQR = ~ paste0(sprintf("%.2f", quantile(.x, 0.25, na.rm = TRUE)), " - ",  sprintf("%.2f", quantile(.x, 0.75, na.rm = TRUE)))
+        ),
+        .names = "{.col}"
+      )
+    ) |> 
+    pivot_longer(everything(),
+                 names_to = "Variable",
+                 values_to = "IQR")
+  
   desc_table_tmp <- df %>%
     mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_base_cyto_il6_dbs_mean_AB),
            dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
@@ -3490,11 +3531,14 @@ for (group_lv in group_lvs) {
     psych::describe() %>%
     as.data.frame() %>%
     tibble::rownames_to_column("Variable") %>%
-    dplyr::select(Variable, n, mean, sd 
+    dplyr::select(Variable, n, mean, sd, median
                   ) %>%
     mutate(mean = as.character(sprintf("%.2f", mean)),
-           sd = as.character(sprintf("%.2f", sd))) %>% 
+           sd = as.character(sprintf("%.2f", sd)),
+         median = as.character(sprintf("%.2f", median))) %>% 
+    left_join(desc_table_IQR) %>% 
     full_join(desc_table_medTherapy_tmp) %>% 
+  mutate(median_IQR = ifelse(Variable %in% sr_all, paste0(median, " (", IQR, ")"), "")) %>% 
     mutate(n = as.integer(n)) %>%
     mutate(
       Title = sapply(Variable, map_title, title_map = target_titles),
@@ -3513,10 +3557,11 @@ for (group_lv in group_lvs) {
       Time_order = factor(Time, levels = time_order)
       ) %>%
     arrange(Title_order, Time_order) %>% 
-    dplyr::select(Title, Time, n, mean, sd
+    dplyr::select(Title, Time, n, mean, sd, median_IQR
                   ) %>%
   rename('Mean' = mean,
-         'SD' = sd) %>% 
+         'SD' = sd,
+         'Median (IQR)' = median_IQR) %>% 
     rename_with(~paste0(., "_", group_lv), -c(Title, Time))
   
   desc_table_grouped <- left_join(desc_table_grouped, desc_table_tmp)
@@ -3530,7 +3575,7 @@ gt_table <- desc_table_grouped %>%
   fmt_number(columns = where(is.numeric) & !matches("(^|_)n(_|$)"), decimals = 2) %>%
   tab_spanner(
     label = "All Participants",
-    columns = c(n, 'Mean/Count', 'SD/%'
+    columns = c(n, 'Mean/Count', 'SD/%', 'Median (IQR)'
                 )
   )
 
@@ -3538,11 +3583,12 @@ gt_table <- desc_table_grouped %>%
 for (group_lv in group_lvs) {
   # Create named list for cols_label
   label_list <- setNames(
-    list("n", 'Mean/Count', 'SD/%'
+    list("n", 'Mean/Count', 'SD/%', 'Median (IQR)'
          ),
     c(paste0("n_", group_lv),
       paste0("Mean_", group_lv),
-      paste0("SD_", group_lv)
+      paste0("SD_", group_lv),
+      paste0("Median (IQR)_", group_lv)
       )
   )
   
@@ -3561,7 +3607,8 @@ for (group_lv in group_lvs) {
       columns = c(
         paste0("n_", group_lv),
         paste0("Mean_", group_lv),
-        paste0("SD_", group_lv)
+        paste0("SD_", group_lv),
+        paste0("Median (IQR)_", group_lv)
       )
     ) %>%
     cols_label(.list = label_list)
@@ -4014,7 +4061,7 @@ run_piecewise_og_long(
 ```
 
 
-# HMP usage
+### HMP usage
 ```{r hmp_usage}
 # Usage by group
 summary(lm(hmp_intervention_sum_days ~ group, data = df))
@@ -4035,5 +4082,159 @@ confint(hmp_2way)
 hmp_3way <- lmer(phq8_sum ~ time1*sr_scr_rand_group*hmp_intervention_sum_days + time2*sr_scr_rand_group*hmp_followup_sum_days + (time1|id), data = df_long)
 summary(hmp_3way)
 confint(hmp_3way)
+```
+
+# Poisson model
+```{r poisson}
+phq8_levels <- df %>%
+  dplyr::select(matches("phq8_sum$")) %>%
+  names()
+
+df %>%
+  dplyr::select(matches("phq8_sum$")) %>%
+  pivot_longer(everything(),
+               names_to = "time",
+               values_to = "phq8") %>%
+  mutate(time = factor(time,
+                       levels = phq8_levels,
+                       labels = c("Baseline", "Week 1", "Week 2",
+                                  "Week 3", "Week 4", "Week 17"))) %>%
+  ggplot(aes(x = phq8)) +
+  geom_density(fill = "grey70", color = "black", alpha = .6) +
+  facet_wrap(~ time, nrow = 2) +
+  labs(x = "PHQ-8", y = "Density") +
+  theme_bw()
+# ggsave("Data/phq8_density_by_time.png", width = 8, height = 5, dpi = 300)
+
+df %>%
+  dplyr::select("dbs_base_cyto_il6_dbs_mean_AB","dbs_3mo_cyto_il6_dbs_mean_AB") %>%
+  pivot_longer(everything(),
+               names_to = "time",
+               values_to = "il6") %>%
+  mutate(time = factor(time,
+                       levels = c("dbs_base_cyto_il6_dbs_mean_AB","dbs_3mo_cyto_il6_dbs_mean_AB"),
+                       labels = c("Baseline", "Week 17"))) %>%
+  ggplot(aes(x = il6)) +
+  geom_density(fill = "grey70", color = "black", alpha = .6) +
+  facet_wrap(~ time, nrow = 2) +
+  labs(x = "Interleukin-6", y = "Density") +
+  theme_bw()
+# ggsave("Data/il6_density_by_time.png", width = 8, height = 5, dpi = 300)
+
+## ---- config ----------------------------------------------------------
+d        <- df_long
+grp      <- "sr_scr_rand_group"   # grouping/arm variable
+max_score <- 24                    # PHQ-8 upper bound
+wts      <- c(4, 1)                # weights on (time1:grp, time2:grp)
+
+## ---- models ----------------------------------------------------------
+rhs <- paste0("time1*", grp, " + time2*", grp, " + (time1|id)")
+
+m.gaus <- glmmTMB(as.formula(paste("phq8_sum ~", rhs)), data = d, family = gaussian)
+m.pois <- glmmTMB(as.formula(paste("phq8_sum ~", rhs)), data = d, family = poisson)
+
+check_overdispersion(m.pois)
+
+## ---- AIC / BIC -------------------------------------------------------
+mods <- list(Gaussian = m.gaus, Poisson = m.pois)
+
+ic <- data.frame(
+  model  = names(mods),
+  df     = sapply(mods, function(x) attr(logLik(x), "df")),
+  logLik = sapply(mods, function(x) as.numeric(logLik(x))),
+  AIC    = sapply(mods, AIC),
+  BIC    = sapply(mods, BIC),
+  row.names = NULL
+)
+print(ic[order(ic$AIC), ])
+
+summary(m.pois)
+
+## ---- glht equivalent: 4*(time1:grp) + 1*(time2:grp) ------------------
+contrast_test <- function(model, group_term, weights = wts,
+                          exponentiate = FALSE, label = NULL) {
+  
+  if (inherits(model, "glmmTMB")) {
+    b <- glmmTMB::fixef(model)$cond; V <- vcov(model)$cond
+  } else {
+    b <- lme4::fixef(model);         V <- as.matrix(vcov(model))
+  }
+  
+  tc   <- c(paste0("time1:", group_term), paste0("time2:", group_term))
+  flip <- !tc %in% names(b)
+  if (any(flip)) {
+    alt <- c(paste0(group_term, ":time1"), paste0(group_term, ":time2"))
+    tc[flip] <- alt[flip]
+  }
+  if (!all(tc %in% names(b)))
+    stop("Not found: ", paste(setdiff(tc, names(b)), collapse = ", "),
+         "\nAvailable: ", paste(names(b), collapse = ", "))
+  
+  K <- setNames(numeric(length(b)), names(b)); K[tc] <- weights
+  K <- matrix(K, nrow = 1, dimnames = list("contrast", names(b)))
+  
+  est <- as.vector(K %*% b)
+  se  <- as.vector(sqrt(K %*% V %*% t(K)))
+  z   <- est / se
+  
+  out <- data.frame(
+    contrast = if (is.null(label)) paste(tc, collapse = " + ") else label,
+    estimate = est, se = se, z = z, p = 2 * pnorm(-abs(z)),
+    ci_lower = est - qnorm(.975) * se,
+    ci_upper = est + qnorm(.975) * se, row.names = NULL)
+  
+  if (exponentiate)
+    out <- cbind(out["contrast"], ratio = exp(out$estimate),
+                 r_lower = exp(out$ci_lower), r_upper = exp(out$ci_upper),
+                 out[c("se", "z", "p")])
+  out
+}
+
+## ---- apply across models --------------------------------------------
+active <- paste0(grp, "hmp_active")
+uc     <- paste0(grp, "uc")
+
+rbind(
+  contrast_test(m.gaus, active, label = "Gaussian: full vs active"),
+  contrast_test(m.gaus, uc,     label = "Gaussian: full vs UC")
+)
+
+rbind(
+  contrast_test(m.pois, active, exponentiate = TRUE, label = "Poisson: full vs active"),
+  contrast_test(m.pois, uc,     exponentiate = TRUE, label = "Poisson: full vs UC") 
+)
+
+rbind(
+  contrast_test(m.pois, active, exponentiate = FALSE, label = "Poisson: full vs active"),
+  contrast_test(m.pois, uc,     exponentiate = FALSE, label = "Poisson: full vs UC") 
+)
+
+
+##Posterior predictive check on the marginal distribution ---
+sim.g <- simulate(m.gaus, nsim = 500)
+sim.p <- simulate(m.pois, nsim = 500)
+
+obs.tab <- table(factor(dat$value, levels = 0:24)) / nrow(dat)
+
+pp.tab <- function(simlist) {
+  m <- sapply(simlist, function(y)
+    table(factor(round(pmax(y, 0)), levels = 0:24)) / length(y))
+  data.frame(value = 0:24,
+             mean = rowMeans(m),
+             lwr  = apply(m, 1, quantile, .025),
+             upr  = apply(m, 1, quantile, .975))
+}
+
+pp.g <- pp.tab(sim.g); pp.p <- pp.tab(sim.p)
+
+## observed vs predicted frequency, both models
+pdf("~/Data/poisson_vs_gaussian.pdf", width = 7, height = 5) 
+plot(0:24, as.numeric(obs.tab), type = "h", lwd = 3,
+     xlab = "PHQ-8", ylab = "Proportion")
+lines(pp.g$value, pp.g$mean, col = "red",  lwd = 2)
+lines(pp.p$value, pp.p$mean, col = "blue", lwd = 2)
+legend("topright", c("Observed","Gaussian","Poisson"),
+       col = c("black","red","blue"), lwd = 2, bty = "n")
+dev.off() 
 ```
 
