@@ -3054,7 +3054,8 @@ fdr_correction <- function(summary_data, group_vars = c('var_prefix', 'model_typ
 
 ## Load df
 ```{r load_df}
-df <- read.csv(file = 'Z:/BeWell data/Full study/PrimaryPaper/BeWell_primaryPaper_deid.csv', na.strings = c("NaN", "", "NA")) %>%
+df <- read.csv(file = './Data/BeWell_primaryPaper_deid.csv', na.strings = c("NaN", "", "NA")) %>%
+  rename(id = rand_id) %>%
   mutate(sr_scr_rand_group =  factor(sr_scr_rand_group,
                                  levels = c('hmp_full', 'hmp_active', 'uc'))) %>% 
   mutate(gender_combined = recode_values(gender_combined,
@@ -3156,6 +3157,15 @@ df <- df |>
                      TRUE ~ sr_3mo_curhealth_infectionCount))
 
 ```
+
+## rand_ids to be excluded from DBS analysis
+Exclude due to tech error
+```{r dbs_exclude_ids}
+dbs_exc_ids <- c('R803211',
+                 'R769299',
+                 'R982843')
+```
+
 
 ## Converting df to long format
 Creating general variable list
@@ -3422,8 +3432,8 @@ desc_table_medTherapy <- df %>%
   rename(Variable = variable)
 
 desc_table_IQR <- df %>% 
-  mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_base_cyto_il6_dbs_mean_AB),
-         dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
+  mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_base_cyto_il6_dbs_mean_AB),
+         dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
   dplyr::select(all_of(c(sr_all))) |> 
   summarise(
     across(
@@ -3440,8 +3450,8 @@ desc_table_IQR <- df %>%
   
 
 desc_table <- df %>% 
-  mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_base_cyto_il6_dbs_mean_AB),
-         dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
+  mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_base_cyto_il6_dbs_mean_AB),
+         dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
   dplyr::select(all_of(c(sr_all,
                          dbs_all,
                          mib_all,
@@ -3503,8 +3513,8 @@ for (group_lv in group_lvs) {
   
   desc_table_IQR_tmp <- df %>% 
     filter(sr_scr_rand_group == group_lv) %>%
-    mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_base_cyto_il6_dbs_mean_AB),
-           dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
+    mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_base_cyto_il6_dbs_mean_AB),
+           dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
     dplyr::select(all_of(c(sr_all))) |> 
     summarise(
       across(
@@ -3520,8 +3530,8 @@ for (group_lv in group_lvs) {
                  values_to = "IQR")
   
   desc_table_tmp <- df %>%
-    mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_base_cyto_il6_dbs_mean_AB),
-           dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% c('R134635', 'R352787', 'R456606'), NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
+    mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_base_cyto_il6_dbs_mean_AB),
+           dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
     filter(sr_scr_rand_group == group_lv) %>%
     dplyr::select(all_of(c(sr_all,
                            dbs_all,
@@ -3840,7 +3850,7 @@ crp_summary <- crp_models$result_summary %>%
 ### Tobit regression and sensitivity analysis for IL-6
 ```{r il6_tobit}
 tobit_models <- tobit_comparison_eh(df %>% 
-                      filter(!id %in% c('R134635', 'R352787', 'R456606')), # exclude likely technical errors for IL6
+                      filter(!id %in% dbs_exc_ids), # exclude likely technical errors for IL6
                     "cyto_il6_dbs_mean_AB")
 
 tobit_summary <- tobit_models$result_summary %>% 
@@ -3942,7 +3952,7 @@ exc_3sds_summaries <- dplyr::bind_rows(exc_3sds_summaries, exc_3sds_summary)
 
 # IL-6
 tobit_exc_3sds_models <- tobit_comparison_eh(df %>% 
-                                               filter(!id %in% c('R134635', 'R352787', 'R456606')), # exclude likely technical errors for IL6
+                                               filter(!id %in% dbs_exc_ids), # exclude likely technical errors for IL6
                                              "cyto_il6_dbs_mean_AB",
                                              exc_outlier = TRUE)
 exc_3sds_summary <- tobit_exc_3sds_models$result_summary %>% 
@@ -3999,7 +4009,7 @@ ac_summaries <- dplyr::bind_rows(ac_summaries, ac_summary)
 
 # IL-6
 tobit_ac_models <- tobit_comparison_eh(df %>% 
-                                         filter(!id %in% c('R134635', 'R352787', 'R456606')), # exclude likely technical errors for IL6
+                                         filter(!id %in% dbs_exc_ids), # exclude likely technical errors for IL6
                                        "cyto_il6_dbs_mean_AB", 
                                        ref_level = 'hmp_active')
 ac_summary <- tobit_ac_models$result_summary %>% 
