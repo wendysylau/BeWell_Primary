@@ -3428,13 +3428,19 @@ desc_table_medTherapy <- df %>%
     mean = sum(value, na.rm = TRUE), # total count of ppts with that medication/therapy, naming as mean for merging purpose
     sd = sprintf("%.1f%%", mean / n * 100) # percentage of ppts with that medication/therapy, naming as sd for merging purpose
   ) %>% 
-  mutate(mean = sprintf("%.0f", mean)) %>% 
+  mutate(mean = sprintf("%.0f", mean),
+         median_IQR = " ") %>% 
   rename(Variable = variable)
+  
 
 desc_table_IQR <- df %>% 
   mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_base_cyto_il6_dbs_mean_AB),
          dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
-  dplyr::select(all_of(c(sr_all))) |> 
+  dplyr::select(all_of(c(sr_all,
+                         dbs_all,
+                         mib_all,
+                         vlg_all,
+                         mst_all))) |> 
   summarise(
     across(
       everything(),
@@ -3460,15 +3466,14 @@ desc_table <- df %>%
   psych::describe() %>%
   as.data.frame() %>%
   tibble::rownames_to_column("Variable") %>%
-  dplyr::select(Variable, n, mean, sd, median #, 
-                # skew, kurtosis
+  dplyr::select(Variable, n, mean, sd, median
                 ) %>%
   mutate(mean = as.character(sprintf("%.2f", mean)),
          sd = as.character(sprintf("%.2f", sd)),
          median = as.character(sprintf("%.2f", median))) %>% 
   left_join(desc_table_IQR) |> 
+  mutate(median_IQR = paste0(median, " (", IQR, ")")) %>% 
   full_join(desc_table_medTherapy) %>% 
-  mutate(median_IQR = ifelse(Variable %in% sr_all, paste0(median, " (", IQR, ")"), "")) %>% 
   mutate(n = as.integer(n)) %>%
   mutate(
     Title = sapply(Variable, map_title, title_map = target_titles),
@@ -3508,14 +3513,19 @@ for (group_lv in group_lvs) {
       mean = sum(value, na.rm = TRUE), # total count of ppts with that medication/therapy, naming as mean for merging purpose
       sd = sprintf("%.1f%%", mean / n * 100) # percentage of ppts with that medication/therapy, naming as sd for merging purpose
     ) %>% 
-    mutate(mean = sprintf("%.0f", mean)) %>% 
+    mutate(mean = sprintf("%.0f", mean),
+         median_IQR = " ") %>% 
     rename(Variable = variable)
   
   desc_table_IQR_tmp <- df %>% 
     filter(sr_scr_rand_group == group_lv) %>%
     mutate(dbs_base_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_base_cyto_il6_dbs_mean_AB),
            dbs_3mo_cyto_il6_dbs_mean_AB = ifelse(id %in% dbs_exc_ids, NA, dbs_3mo_cyto_il6_dbs_mean_AB)) %>% # exclude IL6 cases with tech errors
-    dplyr::select(all_of(c(sr_all))) |> 
+    dplyr::select(all_of(c(sr_all,
+                         dbs_all,
+                         mib_all,
+                         vlg_all,
+                         mst_all))) |> 
     summarise(
       across(
         everything(),
@@ -3547,8 +3557,8 @@ for (group_lv in group_lvs) {
            sd = as.character(sprintf("%.2f", sd)),
          median = as.character(sprintf("%.2f", median))) %>% 
     left_join(desc_table_IQR) %>% 
+    mutate(median_IQR = paste0(median, " (", IQR, ")")) %>% 
     full_join(desc_table_medTherapy_tmp) %>% 
-  mutate(median_IQR = ifelse(Variable %in% sr_all, paste0(median, " (", IQR, ")"), "")) %>% 
     mutate(n = as.integer(n)) %>%
     mutate(
       Title = sapply(Variable, map_title, title_map = target_titles),
@@ -3589,9 +3599,7 @@ gt_table <- desc_table_grouped %>%
                 )
   )
 
-# Add a spanner for each group and relabel columns
 for (group_lv in group_lvs) {
-  # Create named list for cols_label
   label_list <- setNames(
     list("n", 'Mean/Count', 'SD/%', 'Median (IQR)'
          ),
