@@ -4122,7 +4122,7 @@ df %>%
   facet_wrap(~ time, nrow = 2) +
   labs(x = "PHQ-8", y = "Density") +
   theme_bw()
-# ggsave("Data/phq8_density_by_time.png", width = 8, height = 5, dpi = 300)
+ggsave("./Data/phq8_density_by_time.png", width = 8, height = 5, dpi = 300)
 
 df %>%
   dplyr::select("dbs_base_cyto_il6_dbs_mean_AB","dbs_3mo_cyto_il6_dbs_mean_AB") %>%
@@ -4137,7 +4137,7 @@ df %>%
   facet_wrap(~ time, nrow = 2) +
   labs(x = "Interleukin-6", y = "Density") +
   theme_bw()
-# ggsave("Data/il6_density_by_time.png", width = 8, height = 5, dpi = 300)
+ggsave("./Data/il6_density_by_time.png", width = 8, height = 5, dpi = 300)
 
 ## ---- config ----------------------------------------------------------
 d        <- df_long
@@ -4232,7 +4232,7 @@ rbind(
 sim.g <- simulate(m.gaus, nsim = 500)
 sim.p <- simulate(m.pois, nsim = 500)
 
-obs.tab <- table(factor(dat$value, levels = 0:24)) / nrow(dat)
+obs.tab <- table(factor(d$phq8_sum, levels = 0:24)) / nrow(d)
 
 pp.tab <- function(simlist) {
   m <- sapply(simlist, function(y)
@@ -4248,6 +4248,7 @@ pp.g <- pp.tab(sim.g); pp.p <- pp.tab(sim.p)
 ## observed vs predicted frequency, both models
 pdf("~/Data/poisson_vs_gaussian.pdf", width = 7, height = 5) 
 plot(0:24, as.numeric(obs.tab), type = "h", lwd = 3,
+     ylim = c(0, max(as.numeric(obs.tab), pp.g$upr, pp.p$upr)),
      xlab = "PHQ-8", ylab = "Proportion")
 lines(pp.g$value, pp.g$mean, col = "red",  lwd = 2)
 lines(pp.p$value, pp.p$mean, col = "blue", lwd = 2)
