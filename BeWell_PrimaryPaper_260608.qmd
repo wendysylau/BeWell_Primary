@@ -3056,6 +3056,7 @@ fdr_correction <- function(summary_data, group_vars = c('var_prefix', 'model_typ
 ```{r load_df}
 df <- read.csv(file = './Data/BeWell_primaryPaper_deid.csv', na.strings = c("NaN", "", "NA")) %>%
   rename(id = rand_id) %>%
+  filter(sr_scr_phq9_sum >=5) |> 
   mutate(sr_scr_rand_group =  factor(sr_scr_rand_group,
                                  levels = c('hmp_full', 'hmp_active', 'uc'))) %>% 
   mutate(gender_combined = recode_values(gender_combined,
@@ -3067,11 +3068,12 @@ df <- read.csv(file = './Data/BeWell_primaryPaper_deid.csv', na.strings = c("NaN
                                       'No' ~ 0,
                                       'Yes' ~ 1),
          education_level = recode_values(education_level,
-                                         "not college graduate" ~ 0,
-                                         "college graduate" ~ 1),
+                                         "not_college_graduate" ~ 0,
+                                         "college_graduate" ~ 1),
          income_level = recode_values(income_level,
-                                      "below median" ~ 0,
-                                      "above median" ~ 1)) %>% 
+                                      "below_median" ~ 0,
+                                      "above_median" ~ 1)
+         ) %>% 
   mutate(gender_combined = factor(gender_combined,
                                   levels = 0:2,
                                   labels = c('Woman', 
@@ -3161,9 +3163,9 @@ df <- df |>
 ## rand_ids to be excluded from DBS analysis
 Exclude due to tech error
 ```{r dbs_exclude_ids}
-dbs_exc_ids <- c('R803211',
-                 'R769299',
-                 'R982843')
+dbs_exc_ids <- df |> 
+  filter(dbs_cyto_il6_tech_error == 1) |> 
+  pull(id)
 ```
 
 
@@ -4082,22 +4084,22 @@ run_piecewise_og_long(
 ### HMP usage
 ```{r hmp_usage}
 # Usage by group
-summary(lm(hmp_intervention_sum_days ~ group, data = df))
-confint(lm(hmp_intervention_sum_days ~ group, data = df))
-summary(lm(scale(hmp_intervention_sum_days) ~ group, data = df))
-confint(lm(scale(hmp_intervention_sum_days) ~ group, data = df))
+summary(lm(hmp_intervention_sum_days_local ~ group, data = df))
+confint(lm(hmp_intervention_sum_days_local ~ group, data = df))
+summary(lm(scale(hmp_intervention_sum_days_local) ~ group, data = df))
+confint(lm(scale(hmp_intervention_sum_days_local) ~ group, data = df))
 
-summary(lm(hmp_followup_sum_days ~ group, data = df))
-confint(lm(hmp_followup_sum_days ~ group, data = df))
-summary(lm(scale(hmp_followup_sum_days) ~ group, data = df))
-confint(lm(scale(hmp_followup_sum_days) ~ group, data = df))
+summary(lm(hmp_followup_sum_days_local ~ group, data = df))
+confint(lm(hmp_followup_sum_days_local ~ group, data = df))
+summary(lm(scale(hmp_followup_sum_days_local) ~ group, data = df))
+confint(lm(scale(hmp_followup_sum_days_local) ~ group, data = df))
 
 # Usage x time X group interaction
-hmp_2way <- lmer(phq8_sum ~ time1*sr_scr_rand_group + time1*hmp_intervention_sum_days + time2*sr_scr_rand_group + time2*hmp_followup_sum_days + (time1|id), data = df_long)
+hmp_2way <- lmer(phq8_sum ~ time1*sr_scr_rand_group + time1*hmp_intervention_sum_days_local + time2*sr_scr_rand_group + time2*hmp_followup_sum_days_local + (time1|id), data = df_long)
 summary(hmp_2way)
 confint(hmp_2way)
 
-hmp_3way <- lmer(phq8_sum ~ time1*sr_scr_rand_group*hmp_intervention_sum_days + time2*sr_scr_rand_group*hmp_followup_sum_days + (time1|id), data = df_long)
+hmp_3way <- lmer(phq8_sum ~ time1*sr_scr_rand_group*hmp_intervention_sum_days_local + time2*sr_scr_rand_group*hmp_followup_sum_days_local + (time1|id), data = df_long)
 summary(hmp_3way)
 confint(hmp_3way)
 ```
